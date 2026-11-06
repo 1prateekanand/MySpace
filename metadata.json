@@ -1,0 +1,6 @@
+{
+  "name": "MySpace - Personal Productivity Dashboard",
+  "description": "A dark, premium personal productivity dashboard featuring centralized bookmark management, a full Kanban task workspace, and document vault.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
