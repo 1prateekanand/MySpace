@@ -25,10 +25,27 @@ import {
   INITIAL_FILES,
   INITIAL_NOTIFICATIONS
 } from '../mock/initialData';
-import { dbService } from '../services/dbService';
+import { dbService, getDefaultWorkspaceState, WorkspaceState } from '../services/dbService';
 import { getSupabase, isSupabaseConnected, saveStoredSupabaseConfig, getStoredSupabaseConfig } from '../lib/supabase';
 import { safeStorage } from '../lib/storage';
 import { cacheFile } from '../lib/fileOpener';
+import { getDeviceId, getWorkspaceNamespace } from '../lib/deviceId';
+import {
+  deriveKeyFromPin,
+  createPinVerifier,
+  verifyPin,
+  base64ToUint8Array,
+  generateSalt
+} from '../lib/crypto';
+import { workspaceDb } from '../lib/workspaceDb';
+import { exportEncryptedBackup, importEncryptedBackup } from '../lib/backup';
+
+export interface MySpaceUser {
+  id: string;
+  email: string;
+  name?: string;
+  avatarUrl?: string;
+}
 
 interface MySpaceContextType {
   // Navigation & Page
@@ -39,19 +56,37 @@ interface MySpaceContextType {
   theme: ThemeMode;
   toggleTheme: () => void;
 
-  // User
+  // User Profile (within workspace)
   user: UserProfile;
   updateUser: (profile: Partial<UserProfile>) => Promise<void>;
 
-  // Supabase Auth & State
+  // Multi-User Auth & State
+  isAuthLoading: boolean;
   isSupabaseConfigured: boolean;
-  supabaseUser: any | null;
+  supabaseUser: MySpaceUser | null;
   isAuthModalOpen: boolean;
   setIsAuthModalOpen: (open: boolean) => void;
   signInWithSupabase: (email: string, pass: string) => Promise<{ error?: string }>;
   signUpWithSupabase: (email: string, pass: string, name: string) => Promise<{ error?: string }>;
+  resetPasswordWithSupabase: (email: string) => Promise<{ error?: string }>;
   signOutSupabase: () => Promise<void>;
   updateSupabaseCredentials: (url: string, key: string) => void;
+
+  // Device-Isolated Workspace & PIN Lock
+  deviceId: string;
+  workspaceNamespace: string;
+  isWorkspaceLocked: boolean;
+  isPinSetupNeeded: boolean;
+  setupVaultPin: (pin: string) => Promise<{ success: boolean; error?: string }>;
+  unlockWorkspaceWithPin: (pin: string) => Promise<{ success: boolean; error?: string }>;
+  lockWorkspace: () => void;
+  resetLocalWorkspace: () => Promise<void>;
+
+  // Backup & Restore
+  isBackupModalOpen: boolean;
+  setIsBackupModalOpen: (open: boolean) => void;
+  exportEncryptedBackupFile: (pin: string) => Promise<{ success: boolean; filename?: string; error?: string }>;
+  importEncryptedBackupFile: (file: File, pin: string) => Promise<{ success: boolean; error?: string; restored?: any }>;
 
   // Global Search Modal
   isSearchOpen: boolean;
@@ -146,7 +181,11 @@ interface MySpaceContextType {
 
 const MySpaceContext = createContext<MySpaceContextType | undefined>(undefined);
 
+const LOCAL_SESSION_KEY = 'myspace_auth_user_session';
+
 export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const deviceId = getDeviceId();
+
   // Navigation & Page
   const [currentPage, setCurrentPage] = useState<NavPage>(() => {
     try {
@@ -173,66 +212,43 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   });
 
-  // User Profile
-  const [user, setUser] = useState<UserProfile>(INITIAL_USER);
-
-  // Supabase Auth & State
+  // Auth & Multi-User State
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
   const [isSupabaseConfigured, setIsSupabaseConfigured] = useState<boolean>(isSupabaseConnected());
-  const [supabaseUser, setSupabaseUser] = useState<any | null>(null);
+  const [supabaseUser, setSupabaseUser] = useState<MySpaceUser | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
 
-  // Global Search Modal
+  // Device-Isolated Workspace Security State
+  const [isWorkspaceLocked, setIsWorkspaceLocked] = useState<boolean>(true);
+  const [isPinSetupNeeded, setIsPinSetupNeeded] = useState<boolean>(false);
+  const [activeNamespace, setActiveNamespace] = useState<string>('');
+
+  // Workspace In-Memory Entities
+  const [user, setUser] = useState<UserProfile>(INITIAL_USER);
+  const [categories, setCategories] = useState<LinkCategory[]>(INITIAL_CATEGORIES);
+  const [links, setLinks] = useState<BookmarkLink[]>(INITIAL_LINKS);
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
+  const [dashboards, setDashboards] = useState<WorkDashboard[]>(INITIAL_DASHBOARDS);
+  const [activeDashboardId, setActiveDashboardId] = useState<string>('dash-working');
+  const [workListViewMode, setWorkListViewMode] = useState<WorkListViewMode>('board');
+  const [tasks, setTasks] = useState<TaskItem[]>(INITIAL_TASKS);
+  const [folders, setFolders] = useState<VaultFolder[]>(INITIAL_FOLDERS);
+  const [files, setFiles] = useState<VaultFile[]>(INITIAL_FILES);
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>('f-projects');
+  const [vaultViewMode, setVaultViewMode] = useState<'grid' | 'list'>('grid');
+  const [vaultSortBy, setVaultSortBy] = useState<'name' | 'date' | 'size'>('name');
+  const [vaultSearchQuery, setVaultSearchQuery] = useState('');
+  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>(INITIAL_NOTIFICATIONS);
+
+  // Global Search
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Toasts
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
-  // Notifications
-  const [notifications, setNotifications] = useState<AppNotification[]>(INITIAL_NOTIFICATIONS);
-
-  // Links
-  const [categories, setCategories] = useState<LinkCategory[]>(INITIAL_CATEGORIES);
-  const [links, setLinks] = useState<BookmarkLink[]>(INITIAL_LINKS);
-  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>(() => {
-    try {
-      return safeStorage.getItem('myspace_selected_category') || 'all';
-    } catch {
-      return 'all';
-    }
-  });
-
-  // Work List
-  const [dashboards, setDashboards] = useState<WorkDashboard[]>(INITIAL_DASHBOARDS);
-  const [activeDashboardId, setActiveDashboardId] = useState<string>(() => {
-    try {
-      return safeStorage.getItem('myspace_active_dashboard') || 'dash-working';
-    } catch {
-      return 'dash-working';
-    }
-  });
-  const [workListViewMode, setWorkListViewMode] = useState<WorkListViewMode>('board');
-  const [tasks, setTasks] = useState<TaskItem[]>(INITIAL_TASKS);
-
-  // Vault
-  const [folders, setFolders] = useState<VaultFolder[]>(INITIAL_FOLDERS);
-  const [files, setFiles] = useState<VaultFile[]>(INITIAL_FILES);
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>(() => {
-    try {
-      const saved = safeStorage.getItem('myspace_current_folder');
-      if (saved === 'null') return null;
-      if (saved) return saved;
-      return 'f-projects';
-    } catch {
-      return 'f-projects';
-    }
-  });
-  const [vaultViewMode, setVaultViewMode] = useState<'grid' | 'list'>('grid');
-  const [vaultSortBy, setVaultSortBy] = useState<'name' | 'date' | 'size'>('name');
-  const [vaultSearchQuery, setVaultSearchQuery] = useState('');
-  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
-
-  // Toast Helper
   const showToast = useCallback((message: string, type: ToastItem['type'] = 'success') => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     setToasts(prev => [...prev, { id, message, type }]);
@@ -245,7 +261,7 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
-  // Sync Theme to HTML class & data-theme
+  // Sync Theme
   useEffect(() => {
     try {
       const root = document.documentElement;
@@ -271,32 +287,7 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   }, [currentPage]);
 
-  // Persist Submenu Selections
-  useEffect(() => {
-    try {
-      safeStorage.setItem('myspace_selected_category', selectedCategoryFilter);
-    } catch {
-      // ignore
-    }
-  }, [selectedCategoryFilter]);
-
-  useEffect(() => {
-    try {
-      safeStorage.setItem('myspace_active_dashboard', activeDashboardId);
-    } catch {
-      // ignore
-    }
-  }, [activeDashboardId]);
-
-  useEffect(() => {
-    try {
-      safeStorage.setItem('myspace_current_folder', String(currentFolderId));
-    } catch {
-      // ignore
-    }
-  }, [currentFolderId]);
-
-  // Global Keyboard Shortcut (Ctrl+K or Cmd+K)
+  // Keyboard shortcut Ctrl+K
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -308,52 +299,418 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Initial Asynchronous Load from Database (Supabase / local store)
+  // Check Auth State on Startup
+  const checkWorkspaceSecurity = useCallback(async (activeUser: MySpaceUser) => {
+    const namespace = getWorkspaceNamespace(activeUser.id);
+    setActiveNamespace(namespace);
+
+    try {
+      const meta = await workspaceDb.loadAuthMetadata(namespace);
+      if (!meta) {
+        // User has not set up a PIN for this device yet
+        setIsPinSetupNeeded(true);
+        setIsWorkspaceLocked(true);
+      } else {
+        // PIN exists, workspace is locked until PIN is entered
+        setIsPinSetupNeeded(false);
+        setIsWorkspaceLocked(true);
+      }
+    } catch (err) {
+      console.error('Failed reading workspace auth metadata:', err);
+      setIsPinSetupNeeded(true);
+      setIsWorkspaceLocked(true);
+    }
+  }, []);
+
   useEffect(() => {
-    const initData = async () => {
+    const initAuth = async () => {
+      setIsAuthLoading(true);
+
       try {
         const client = getSupabase();
+        let userFound: MySpaceUser | null = null;
+
         if (client) {
           const { data: { session } } = await client.auth.getSession();
           if (session?.user) {
-            setSupabaseUser(session.user);
+            userFound = {
+              id: session.user.id,
+              email: session.user.email || '',
+              name: session.user.user_metadata?.name || session.user.email?.split('@')[0],
+              avatarUrl: session.user.user_metadata?.avatar_url,
+            };
           }
 
-          client.auth.onAuthStateChange((_event, session) => {
-            setSupabaseUser(session?.user ?? null);
+          client.auth.onAuthStateChange(async (_event, session) => {
+            if (session?.user) {
+              const u: MySpaceUser = {
+                id: session.user.id,
+                email: session.user.email || '',
+                name: session.user.user_metadata?.name || session.user.email?.split('@')[0],
+                avatarUrl: session.user.user_metadata?.avatar_url,
+              };
+              setSupabaseUser(u);
+              await checkWorkspaceSecurity(u);
+            } else {
+              setSupabaseUser(null);
+              setIsWorkspaceLocked(true);
+              dbService.clearActiveWorkspace();
+            }
           });
         }
 
-        const [loadedUser, loadedCats, loadedLinks, loadedDashboards, loadedTasks, loadedFolders, loadedFiles, loadedNotifs] =
-          await Promise.all([
-            dbService.loadUserProfile(),
-            dbService.loadCategories(),
-            dbService.loadLinks(),
-            dbService.loadDashboards(),
-            dbService.loadTasks(),
-            dbService.loadFolders(),
-            dbService.loadFiles(),
-            dbService.loadNotifications(),
-          ]);
-
-        setUser(loadedUser);
-        setCategories(loadedCats);
-        setLinks(loadedLinks);
-        setDashboards(loadedDashboards);
-        if (loadedDashboards.length > 0 && !loadedDashboards.find(d => d.id === activeDashboardId)) {
-          setActiveDashboardId(loadedDashboards[0].id);
+        // Check local storage session fallback
+        if (!userFound) {
+          const savedSession = safeStorage.getItem(LOCAL_SESSION_KEY);
+          if (savedSession) {
+            try {
+              userFound = JSON.parse(savedSession);
+            } catch {
+              // ignore
+            }
+          }
         }
-        setTasks(loadedTasks);
-        setFolders(loadedFolders);
-        setFiles(loadedFiles);
-        setNotifications(loadedNotifs);
+
+        if (userFound) {
+          setSupabaseUser(userFound);
+          await checkWorkspaceSecurity(userFound);
+        } else {
+          setSupabaseUser(null);
+          setIsWorkspaceLocked(true);
+        }
       } catch (err) {
-        console.error('Initial database load error:', err);
+        console.error('Error in initial auth check:', err);
+      } finally {
+        setIsAuthLoading(false);
       }
     };
 
-    initData();
-  }, []);
+    initAuth();
+  }, [checkWorkspaceSecurity]);
+
+  // Unlock Workspace with PIN
+  const unlockWorkspaceWithPin = async (pin: string): Promise<{ success: boolean; error?: string }> => {
+    if (!supabaseUser || !activeNamespace) {
+      return { success: false, error: 'No authenticated user session.' };
+    }
+
+    try {
+      const meta = await workspaceDb.loadAuthMetadata(activeNamespace);
+      if (!meta) {
+        return { success: false, error: 'No Vault PIN configured for this device.' };
+      }
+
+      // Verify PIN
+      const isMatch = await verifyPin(pin, meta.verifierSalt, meta.verifierHash);
+      if (!isMatch) {
+        return { success: false, error: 'Incorrect Vault PIN. Please try again.' };
+      }
+
+      // Derive AES-256 CryptoKey
+      const salt = base64ToUint8Array(meta.verifierSalt);
+      const cryptoKey = await deriveKeyFromPin(pin, salt);
+
+      // Load and decrypt local workspace from IndexedDB
+      let state: WorkspaceState | null = null;
+      try {
+        state = await dbService.loadEncryptedWorkspaceFromDB(activeNamespace, cryptoKey);
+      } catch {
+        return { success: false, error: 'Failed to decrypt workspace data with this PIN.' };
+      }
+
+      if (!state) {
+        // Fallback default state if first time unlocking empty DB
+        state = getDefaultWorkspaceState(supabaseUser.email, supabaseUser.name);
+      }
+
+      // Activate workspace in dbService & React state
+      dbService.setActiveWorkspace(activeNamespace, cryptoKey, state);
+      setUser(state.user || INITIAL_USER);
+      setCategories(state.categories || INITIAL_CATEGORIES);
+      setLinks(state.links || INITIAL_LINKS);
+      setDashboards(state.dashboards || INITIAL_DASHBOARDS);
+      setTasks(state.tasks || INITIAL_TASKS);
+      setFolders(state.folders || INITIAL_FOLDERS);
+      setFiles(state.files || INITIAL_FILES);
+      setNotifications(state.notifications || INITIAL_NOTIFICATIONS);
+
+      if (state.dashboards && state.dashboards.length > 0) {
+        setActiveDashboardId(state.dashboards[0].id);
+      }
+
+      setIsWorkspaceLocked(false);
+      setIsPinSetupNeeded(false);
+      showToast('Workspace unlocked successfully', 'success');
+      return { success: true };
+    } catch (err: any) {
+      console.error('Unlock error:', err);
+      return { success: false, error: err?.message || 'Failed to unlock workspace.' };
+    }
+  };
+
+  // Setup Vault PIN for new user/device
+  const setupVaultPin = async (pin: string): Promise<{ success: boolean; error?: string }> => {
+    if (!supabaseUser || !activeNamespace) {
+      return { success: false, error: 'No active user session to bind PIN.' };
+    }
+    if (pin.length < 4) {
+      return { success: false, error: 'PIN must be at least 4 digits.' };
+    }
+
+    try {
+      // 1. Create verification tokens
+      const { verifierSalt, verifierHash } = await createPinVerifier(pin);
+
+      await workspaceDb.saveAuthMetadata({
+        namespace: activeNamespace,
+        verifierSalt,
+        verifierHash,
+        createdAt: new Date().toISOString(),
+        lastUnlockedAt: new Date().toISOString(),
+      });
+
+      // 2. Derive encryption key
+      const salt = base64ToUint8Array(verifierSalt);
+      const cryptoKey = await deriveKeyFromPin(pin, salt);
+
+      // 3. Initialize fresh default workspace for this user
+      const initialState = getDefaultWorkspaceState(supabaseUser.email, supabaseUser.name);
+      dbService.setActiveWorkspace(activeNamespace, cryptoKey, initialState);
+
+      setUser(initialState.user);
+      setCategories(initialState.categories);
+      setLinks(initialState.links);
+      setDashboards(initialState.dashboards);
+      setTasks(initialState.tasks);
+      setFolders(initialState.folders);
+      setFiles(initialState.files);
+      setNotifications(initialState.notifications);
+
+      // Persist encrypted initial state immediately to IndexedDB
+      await dbService.saveRawWorkspaceState(initialState);
+
+      setIsPinSetupNeeded(false);
+      setIsWorkspaceLocked(false);
+
+      showToast('Vault PIN set up & workspace encrypted!', 'success');
+      return { success: true };
+    } catch (err: any) {
+      console.error('Setup PIN error:', err);
+      return { success: false, error: err?.message || 'Failed to setup Vault PIN.' };
+    }
+  };
+
+  // Lock Workspace (manually or on inactivity)
+  const lockWorkspace = () => {
+    dbService.clearActiveWorkspace();
+    setIsWorkspaceLocked(true);
+    showToast('Workspace locked', 'info');
+  };
+
+  // Reset Local Workspace (if PIN forgotten)
+  const resetLocalWorkspace = async () => {
+    if (!activeNamespace) return;
+    await workspaceDb.clearWorkspace(activeNamespace);
+    dbService.clearActiveWorkspace();
+    setIsPinSetupNeeded(true);
+    setIsWorkspaceLocked(true);
+    showToast('Device workspace reset. Please set a new Vault PIN.', 'warning');
+  };
+
+  // Supabase Auth Methods
+  const signInWithSupabase = async (email: string, pass: string): Promise<{ error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    const client = getSupabase();
+
+    if (client) {
+      const { data, error } = await client.auth.signInWithPassword({ email: cleanEmail, password: pass });
+      if (error) {
+        return { error: error.message };
+      }
+      const u: MySpaceUser = {
+        id: data.user.id,
+        email: data.user.email || cleanEmail,
+        name: data.user.user_metadata?.name || cleanEmail.split('@')[0],
+      };
+      setSupabaseUser(u);
+      safeStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(u));
+      await checkWorkspaceSecurity(u);
+      setIsAuthModalOpen(false);
+      showToast(`Welcome back, ${u.name}!`);
+      return {};
+    }
+
+    // Local account fallback (if no live Supabase server configured)
+    const localUsersRaw = safeStorage.getItem('myspace_registered_users');
+    let localUsers: Array<{ id: string; email: string; pass: string; name: string }> = [];
+    try {
+      if (localUsersRaw) localUsers = JSON.parse(localUsersRaw);
+    } catch {
+      localUsers = [];
+    }
+
+    const matched = localUsers.find(u => u.email === cleanEmail && u.pass === pass);
+    if (!matched && cleanEmail !== 'demo@myspace.local') {
+      return { error: 'Invalid credentials or user not found. (Use any password with demo@myspace.local or create an account).' };
+    }
+
+    const u: MySpaceUser = {
+      id: matched ? matched.id : 'user-demo-01',
+      email: cleanEmail,
+      name: matched ? matched.name : 'Demo User',
+    };
+    setSupabaseUser(u);
+    safeStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(u));
+    await checkWorkspaceSecurity(u);
+    setIsAuthModalOpen(false);
+    showToast(`Welcome back, ${u.name}!`);
+    return {};
+  };
+
+  const signUpWithSupabase = async (email: string, pass: string, name: string): Promise<{ error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanName = name.trim() || cleanEmail.split('@')[0];
+    const client = getSupabase();
+
+    if (client) {
+      const { data, error } = await client.auth.signUp({
+        email: cleanEmail,
+        password: pass,
+        options: { data: { name: cleanName } },
+      });
+      if (error) {
+        return { error: error.message };
+      }
+      if (data.user) {
+        const u: MySpaceUser = {
+          id: data.user.id,
+          email: data.user.email || cleanEmail,
+          name: cleanName,
+        };
+        setSupabaseUser(u);
+        safeStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(u));
+        await checkWorkspaceSecurity(u);
+        setIsAuthModalOpen(false);
+        showToast('Account registered successfully!');
+        return {};
+      }
+    }
+
+    // Local account registration fallback
+    const localUsersRaw = safeStorage.getItem('myspace_registered_users');
+    let localUsers: Array<{ id: string; email: string; pass: string; name: string }> = [];
+    try {
+      if (localUsersRaw) localUsers = JSON.parse(localUsersRaw);
+    } catch {
+      localUsers = [];
+    }
+
+    if (localUsers.some(u => u.email === cleanEmail)) {
+      return { error: 'An account with this email already exists.' };
+    }
+
+    const newLocalUser = {
+      id: 'usr-' + Math.random().toString(36).substring(2, 9),
+      email: cleanEmail,
+      pass,
+      name: cleanName,
+    };
+    localUsers.push(newLocalUser);
+    safeStorage.setItem('myspace_registered_users', JSON.stringify(localUsers));
+
+    const u: MySpaceUser = {
+      id: newLocalUser.id,
+      email: newLocalUser.email,
+      name: newLocalUser.name,
+    };
+    setSupabaseUser(u);
+    safeStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(u));
+    await checkWorkspaceSecurity(u);
+    setIsAuthModalOpen(false);
+    showToast('Account registered locally!');
+    return {};
+  };
+
+  const resetPasswordWithSupabase = async (email: string): Promise<{ error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    const client = getSupabase();
+    if (client) {
+      const { error } = await client.auth.resetPasswordForEmail(cleanEmail);
+      if (error) {
+        return { error: error.message };
+      }
+    }
+    showToast(`Password reset link sent to ${cleanEmail}`, 'info');
+    return {};
+  };
+
+  const signOutSupabase = async () => {
+    const client = getSupabase();
+    if (client) {
+      try {
+        await client.auth.signOut();
+      } catch {
+        // ignore
+      }
+    }
+    safeStorage.removeItem(LOCAL_SESSION_KEY);
+    dbService.clearActiveWorkspace();
+    setSupabaseUser(null);
+    setIsWorkspaceLocked(true);
+    setIsPinSetupNeeded(false);
+    showToast('Signed out of MySpace', 'info');
+  };
+
+  const updateSupabaseCredentials = (url: string, key: string) => {
+    saveStoredSupabaseConfig({ url: url.trim(), anonKey: key.trim() });
+    setIsSupabaseConfigured(isSupabaseConnected());
+    showToast('Supabase configuration updated');
+  };
+
+  // Encrypted Backup & Restore
+  const exportEncryptedBackupFile = async (pin: string): Promise<{ success: boolean; filename?: string; error?: string }> => {
+    if (!supabaseUser || !activeNamespace) {
+      return { success: false, error: 'No active workspace to export.' };
+    }
+    try {
+      const res = await exportEncryptedBackup(pin, supabaseUser.email, activeNamespace);
+      showToast(`Exported encrypted backup: ${res.filename}`, 'success');
+      return res;
+    } catch (err: any) {
+      showToast(`Backup export failed: ${err?.message}`, 'error');
+      return { success: false, error: err?.message };
+    }
+  };
+
+  const importEncryptedBackupFile = async (file: File, pin: string): Promise<{ success: boolean; error?: string; restored?: any }> => {
+    if (!supabaseUser || !activeNamespace) {
+      return { success: false, error: 'No active workspace to restore into.' };
+    }
+    try {
+      const res = await importEncryptedBackup(file, pin, activeNamespace);
+      if (res.success) {
+        // Reload workspace from dbService
+        const restoredState = dbService.getRawWorkspaceState();
+        setUser(restoredState.user);
+        setCategories(restoredState.categories);
+        setLinks(restoredState.links);
+        setDashboards(restoredState.dashboards);
+        setTasks(restoredState.tasks);
+        setFolders(restoredState.folders);
+        setFiles(restoredState.files);
+        setNotifications(restoredState.notifications);
+
+        showToast(`Backup restored! ${res.restoredItems?.links || 0} links, ${res.restoredItems?.tasks || 0} tasks`, 'success');
+        return { success: true, restored: res.restoredItems };
+      } else {
+        showToast(res.error || 'Restore failed', 'error');
+        return { success: false, error: res.error };
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Restore failed', 'error');
+      return { success: false, error: err?.message };
+    }
+  };
 
   const toggleTheme = () => {
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
@@ -362,57 +719,7 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
   const updateUser = async (profile: Partial<UserProfile>) => {
     setUser(prev => ({ ...prev, ...profile }));
     await dbService.saveUserProfile(profile);
-    showToast('Profile updated successfully');
-  };
-
-  // Supabase Auth Methods
-  const signInWithSupabase = async (email: string, pass: string): Promise<{ error?: string }> => {
-    const client = getSupabase();
-    if (!client) {
-      return { error: 'Supabase client not configured. Please add URL & Anon Key.' };
-    }
-    const { data, error } = await client.auth.signInWithPassword({ email, password: pass });
-    if (error) {
-      return { error: error.message };
-    }
-    setSupabaseUser(data.user);
-    showToast('Signed in successfully with Supabase');
-    setIsAuthModalOpen(false);
-    return {};
-  };
-
-  const signUpWithSupabase = async (email: string, pass: string, name: string): Promise<{ error?: string }> => {
-    const client = getSupabase();
-    if (!client) {
-      return { error: 'Supabase client not configured. Please add URL & Anon Key.' };
-    }
-    const { data, error } = await client.auth.signUp({
-      email,
-      password: pass,
-      options: { data: { name } },
-    });
-    if (error) {
-      return { error: error.message };
-    }
-    setSupabaseUser(data.user);
-    showToast('Account created successfully');
-    setIsAuthModalOpen(false);
-    return {};
-  };
-
-  const signOutSupabase = async () => {
-    const client = getSupabase();
-    if (client) {
-      await client.auth.signOut();
-    }
-    setSupabaseUser(null);
-    showToast('Signed out', 'info');
-  };
-
-  const updateSupabaseCredentials = (url: string, key: string) => {
-    saveStoredSupabaseConfig({ url: url.trim(), anonKey: key.trim() });
-    setIsSupabaseConfigured(isSupabaseConnected());
-    showToast('Supabase credentials saved');
+    showToast('Profile updated');
   };
 
   // Notifications logic
@@ -470,7 +777,6 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     setCategories(prev => [...prev, newCat]);
     await dbService.saveCategory(newCat);
     showToast(`Category "${name}" created`);
-    addNotification('Category Created', `Category "${name}" was created successfully.`, 'success');
   };
 
   const updateCategory = async (id: string, name: string, icon: string, color: string) => {
@@ -491,10 +797,6 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     const targetCat = categories.find(c => c.id === id);
     if (!targetCat) return false;
 
-    const originalCategories = [...categories];
-    const originalLinks = [...links];
-
-    // Optimistically update
     setCategories(prev => prev.filter(c => c.id !== id));
     if (moveLinksToCategoryId) {
       setLinks(prev =>
@@ -504,22 +806,12 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
       setLinks(prev => prev.filter(l => l.categoryId !== id));
     }
 
-    try {
-      await dbService.deleteCategory(id, moveLinksToCategoryId);
-      if (selectedCategoryFilter === id) {
-        setSelectedCategoryFilter('all');
-      }
-      showToast(`Category "${targetCat.name}" deleted`, 'info');
-      addNotification('Category Deleted', `Category "${targetCat.name}" was deleted.`, 'info');
-      return true;
-    } catch (err: any) {
-      // Rollback on failure
-      setCategories(originalCategories);
-      setLinks(originalLinks);
-      showToast(`Failed to delete category: ${err?.message || 'Database error'}`, 'error');
-      console.error('Delete category failed:', err);
-      return false;
+    await dbService.deleteCategory(id, moveLinksToCategoryId);
+    if (selectedCategoryFilter === id) {
+      setSelectedCategoryFilter('all');
     }
+    showToast(`Category "${targetCat.name}" deleted`, 'info');
+    return true;
   };
 
   const addLink = async (
@@ -531,12 +823,11 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
       formattedUrl = `https://${formattedUrl}`;
     }
 
-    // Check for duplicate URLs
     const isDuplicate = links.some(
       l => l.url.toLowerCase() === formattedUrl.toLowerCase()
     );
     if (isDuplicate) {
-      showToast(`Link "${formattedUrl}" already exists in your bookmarks!`, 'warning');
+      showToast(`Link "${formattedUrl}" already exists!`, 'warning');
       return { success: false, error: 'A bookmark with this exact URL already exists.' };
     }
 
@@ -550,183 +841,120 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
         const domain = new URL(formattedUrl).hostname;
         favicon = `https://www.google.com/s2/favicons?domain=${domain}&sz=64`;
       } catch {
-        // fallback
+        // ignore
       }
     }
 
     const newLink: BookmarkLink = {
       ...linkData,
-      url: formattedUrl,
       id: `link-${Date.now()}`,
+      url: formattedUrl,
       iconLetter,
-      iconBg: linkData.iconBg || '#1e293b',
       favicon,
       clickCount: 0,
       createdAt: new Date().toISOString(),
+      order: links.filter(l => l.categoryId === linkData.categoryId).length + 1,
     };
 
     setLinks(prev => [newLink, ...prev]);
-    try {
-      await dbService.saveLink(newLink);
-      showToast(`Saved bookmark "${newLink.title}"`);
-      addNotification('Link Added', `"${newLink.title}" was saved to bookmarks.`, 'success');
-      return { success: true };
-    } catch (err: any) {
-      setLinks(prev => prev.filter(l => l.id !== newLink.id));
-      showToast(`Failed to save bookmark: ${err?.message || 'Database error'}`, 'error');
-      return { success: false, error: err?.message };
-    }
+    await dbService.saveLink(newLink);
+    showToast(`Link "${title}" added`);
+    return { success: true };
   };
 
   const updateLink = async (id: string, updates: Partial<BookmarkLink>): Promise<boolean> => {
-    if (updates.url) {
-      const isDuplicate = links.some(
-        l => l.id !== id && l.url.toLowerCase() === updates.url!.toLowerCase()
-      );
-      if (isDuplicate) {
-        showToast(`Another bookmark with URL "${updates.url}" already exists!`, 'warning');
-        return false;
-      }
-    }
-
-    const originalLinks = [...links];
-    let updatedLinkObj: BookmarkLink | undefined;
-
     setLinks(prev =>
-      prev.map(l => {
-        if (l.id === id) {
-          const updated = { ...l, ...updates };
-          updatedLinkObj = updated;
+      prev.map(link => {
+        if (link.id === id) {
+          const updated = { ...link, ...updates };
+          dbService.saveLink(updated);
           return updated;
         }
-        return l;
+        return link;
       })
     );
-
-    if (updatedLinkObj) {
-      try {
-        await dbService.saveLink(updatedLinkObj);
-        showToast('Bookmark updated', 'success');
-        return true;
-      } catch (err: any) {
-        setLinks(originalLinks);
-        showToast(`Failed to update bookmark: ${err?.message || 'Database error'}`, 'error');
-        return false;
-      }
-    }
-    return false;
+    showToast('Link updated');
+    return true;
   };
 
   const deleteLink = async (id: string): Promise<boolean> => {
-    const originalLinks = [...links];
-    const target = links.find(l => l.id === id);
-    if (!target) return false;
-
-    // Optimistically remove from state immediately
     setLinks(prev => prev.filter(l => l.id !== id));
-
-    try {
-      await dbService.deleteLink(id);
-      showToast(`Bookmark "${target.title}" deleted`, 'info');
-      addNotification('Bookmark Deleted', `"${target.title}" was removed from your bookmarks.`, 'info');
-      return true;
-    } catch (err: any) {
-      // Rollback to original state on failure
-      setLinks(originalLinks);
-      showToast(`Failed to delete bookmark: ${err?.message || 'Database error'}`, 'error');
-      console.error('Delete link failed:', err);
-      return false;
-    }
+    await dbService.deleteLink(id);
+    showToast('Link removed', 'info');
+    return true;
   };
 
   const togglePinLink = async (id: string) => {
     setLinks(prev =>
-      prev.map(l => {
-        if (l.id === id) {
-          const updated = { ...l, pinned: !l.pinned };
+      prev.map(link => {
+        if (link.id === id) {
+          const updated = { ...link, pinned: !link.pinned };
           dbService.saveLink(updated);
           return updated;
         }
-        return l;
+        return link;
       })
     );
   };
 
   const trackLinkClick = async (id: string) => {
     setLinks(prev =>
-      prev.map(l => {
-        if (l.id === id) {
-          const updated = { ...l, clickCount: l.clickCount + 1 };
+      prev.map(link => {
+        if (link.id === id) {
+          const updated = { ...link, clickCount: link.clickCount + 1 };
           dbService.saveLink(updated);
           return updated;
         }
-        return l;
+        return link;
       })
     );
   };
 
-  const reorderLinks = async (categoryId: string, reordered: BookmarkLink[]) => {
-    const indexed = reordered.map((l, idx) => ({ ...l, order: idx + 1, categoryId }));
+  const reorderLinks = async (_categoryId: string, reorderedLinks: BookmarkLink[]) => {
+    const reorderedIds = new Set(reorderedLinks.map(l => l.id));
     setLinks(prev => {
-      const otherLinks = prev.filter(l => l.categoryId !== categoryId);
-      const newAll = [...otherLinks, ...indexed];
-      dbService.saveAllLinks(newAll);
-      return newAll;
+      const rest = prev.filter(l => !reorderedIds.has(l.id));
+      const combined = [...reorderedLinks, ...rest];
+      dbService.saveAllLinks(combined);
+      return combined;
     });
   };
 
-  const reorderCategories = async (reordered: LinkCategory[]) => {
-    const ordered = reordered.map((cat, idx) => ({ ...cat, order: idx + 1 }));
-    setCategories(ordered);
-    await dbService.saveAllCategories(ordered);
+  const reorderCategories = async (reorderedCategories: LinkCategory[]) => {
+    setCategories(reorderedCategories);
+    await dbService.saveAllCategories(reorderedCategories);
   };
 
   const moveLink = async (linkId: string, targetCategoryId: string, targetIndex?: number) => {
-    const link = links.find(l => l.id === linkId);
-    if (!link) return;
-
-    const updatedLink: BookmarkLink = {
-      ...link,
-      categoryId: targetCategoryId,
-    };
-
     setLinks(prev => {
-      const otherCategoryLinks = prev.filter(l => l.id !== linkId && l.categoryId !== targetCategoryId);
-      const targetCategoryLinks = prev
-        .filter(l => l.id !== linkId && l.categoryId === targetCategoryId)
-        .sort((a, b) => (a.order || 0) - (b.order || 0));
+      const linkToMove = prev.find(l => l.id === linkId);
+      if (!linkToMove) return prev;
 
-      if (targetIndex !== undefined && targetIndex >= 0) {
-        targetCategoryLinks.splice(targetIndex, 0, updatedLink);
+      const updated = { ...linkToMove, categoryId: targetCategoryId };
+      const filtered = prev.filter(l => l.id !== linkId);
+
+      if (targetIndex !== undefined) {
+        filtered.splice(targetIndex, 0, updated);
       } else {
-        targetCategoryLinks.push(updatedLink);
+        filtered.push(updated);
       }
 
-      const reorderedTarget = targetCategoryLinks.map((l, idx) => ({ ...l, order: idx + 1 }));
-      const newAllLinks = [...otherCategoryLinks, ...reorderedTarget];
-
-      dbService.saveAllLinks(newAllLinks);
-      return newAllLinks;
+      dbService.saveAllLinks(filtered);
+      return filtered;
     });
-
-    const targetCat = categories.find(c => c.id === targetCategoryId);
-    if (targetCat) {
-      showToast(`Moved link to ${targetCat.name}`);
-    }
   };
 
-  // Work List & Tasks Handlers
-  const addDashboard = async (name: string, icon = 'FolderGit2') => {
+  // Work List & Tasks
+  const addDashboard = async (name: string, icon: string = 'Layout') => {
     const newDash: WorkDashboard = {
       id: `dash-${Date.now()}`,
       name,
       icon,
     };
     setDashboards(prev => [...prev, newDash]);
-    setActiveDashboardId(newDash.id);
     await dbService.saveDashboard(newDash);
+    setActiveDashboardId(newDash.id);
     showToast(`Dashboard "${name}" created`);
-    addNotification('Dashboard Created', `Dashboard "${name}" is now active.`, 'success');
   };
 
   const renameDashboard = async (id: string, name: string) => {
@@ -744,46 +972,44 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const duplicateDashboard = async (id: string) => {
-    const targetDash = dashboards.find(d => d.id === id);
-    if (!targetDash) return;
+    const source = dashboards.find(d => d.id === id);
+    if (!source) return;
 
-    const newDashId = `dash-${Date.now()}`;
-    const duplicatedDash: WorkDashboard = {
-      id: newDashId,
-      name: `${targetDash.name} (Copy)`,
-      icon: targetDash.icon,
+    const newDash: WorkDashboard = {
+      id: `dash-${Date.now()}`,
+      name: `${source.name} (Copy)`,
+      icon: source.icon,
     };
 
-    // Duplicate all tasks from target dashboard
     const sourceTasks = tasks.filter(t => t.dashboardId === id);
-    const duplicatedTasks: TaskItem[] = sourceTasks.map(t => ({
+    const newTasks = sourceTasks.map(t => ({
       ...t,
       id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      dashboardId: newDashId,
-      subtasks: t.subtasks.map(st => ({ ...st, id: `st-${Date.now()}-${Math.random().toString(36).slice(2, 5)}` })),
-      comments: [...t.comments],
-      attachments: [...t.attachments],
+      dashboardId: newDash.id,
     }));
 
-    setDashboards(prev => [...prev, duplicatedDash]);
-    setTasks(prev => [...prev, ...duplicatedTasks]);
-    setActiveDashboardId(newDashId);
+    setDashboards(prev => [...prev, newDash]);
+    setTasks(prev => [...prev, ...newTasks]);
 
-    await dbService.saveDashboard(duplicatedDash);
-    for (const t of duplicatedTasks) {
+    await dbService.saveDashboard(newDash);
+    for (const t of newTasks) {
       await dbService.saveTask(t);
     }
-    showToast(`Duplicated "${targetDash.name}" with ${duplicatedTasks.length} tasks`);
+
+    setActiveDashboardId(newDash.id);
+    showToast(`Dashboard duplicated as "${newDash.name}"`);
   };
 
   const deleteDashboard = async (id: string) => {
     if (dashboards.length <= 1) {
-      showToast('Cannot delete the last remaining dashboard', 'warning');
+      showToast('Cannot delete the only remaining dashboard', 'warning');
       return;
     }
+
     const remaining = dashboards.filter(d => d.id !== id);
     setDashboards(remaining);
     setTasks(prev => prev.filter(t => t.dashboardId !== id));
+
     await dbService.deleteDashboard(id);
 
     if (activeDashboardId === id) {
@@ -792,56 +1018,48 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     showToast('Dashboard deleted', 'info');
   };
 
-  const addTask = async (taskData: Omit<TaskItem, 'id' | 'order' | 'createdAt' | 'comments' | 'subtasks' | 'attachments'> & {
-    subtasks?: string[];
-    description?: string;
-  }) => {
-    const newSubtasks = (taskData.subtasks || []).map((st, i) => ({
-      id: `st-${Date.now()}-${i}`,
-      title: st,
-      completed: false,
-    }));
+  const addTask = async (
+    taskData: Omit<TaskItem, 'id' | 'order' | 'createdAt' | 'comments' | 'subtasks' | 'attachments'> & {
+      subtasks?: string[];
+      description?: string;
+    }
+  ) => {
+    const existingInCol = tasks.filter(
+      t => t.dashboardId === taskData.dashboardId && t.status === taskData.status
+    );
 
     const newTask: TaskItem = {
       ...taskData,
       id: `task-${Date.now()}`,
-      order: tasks.filter(t => t.status === taskData.status && t.dashboardId === taskData.dashboardId).length + 1,
-      subtasks: newSubtasks,
-      attachments: [],
-      comments: [],
+      order: existingInCol.length + 1,
       createdAt: new Date().toISOString(),
+      subtasks: (taskData.subtasks || []).map((title, i) => ({
+        id: `st-${Date.now()}-${i}`,
+        title,
+        completed: false,
+      })),
+      comments: [],
+      attachments: [],
+      notes: '',
     };
 
-    setTasks(prev => [newTask, ...prev]);
+    setTasks(prev => [...prev, newTask]);
     await dbService.saveTask(newTask);
     showToast(`Task "${newTask.title}" created`);
-    addNotification('Task Created', `"${newTask.title}" added to ${taskData.status.replace('_', ' ')}.`, 'info');
   };
 
   const updateTask = async (id: string, updates: Partial<TaskItem>) => {
     setTasks(prev =>
-      prev.map(t => {
-        if (t.id !== id) return t;
-        const updated = { ...t, ...updates };
-
-        if (updates.status === 'done' && t.status !== 'done') {
-          try {
-            confetti({
-              particleCount: 50,
-              spread: 60,
-              origin: { y: 0.7 },
-              colors: ['#a855f7', '#6366f1', '#10b981', '#38bdf8']
-            });
-          } catch {
-            // safely handle
-          }
-          updated.progress = 100;
+      prev.map(task => {
+        if (task.id === id) {
+          const updated = { ...task, ...updates };
+          dbService.saveTask(updated);
+          return updated;
         }
-
-        dbService.saveTask(updated);
-        return updated;
+        return task;
       })
     );
+    showToast('Task updated');
   };
 
   const deleteTask = async (id: string) => {
@@ -851,107 +1069,113 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const moveTask = async (taskId: string, targetStatus: TaskStatus, targetIndex?: number) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
-
-    const oldStatus = task.status;
-    const isFinishing = targetStatus === 'done' && oldStatus !== 'done';
-
-    if (isFinishing) {
-      try {
-        confetti({
-          particleCount: 70,
-          spread: 70,
-          origin: { y: 0.6 },
-          colors: ['#F5B942', '#D99A1C', '#10b981', '#ffffff']
-        });
-      } catch {
-        // ignore
-      }
-    }
-
-    const updatedTask: TaskItem = {
-      ...task,
-      status: targetStatus,
-      progress: isFinishing ? 100 : task.progress,
-    };
-
     setTasks(prev => {
-      const otherDashboardTasks = prev.filter(t => t.dashboardId !== task.dashboardId);
-      const currentDashTasks = prev.filter(t => t.dashboardId === task.dashboardId);
+      const task = prev.find(t => t.id === taskId);
+      if (!task) return prev;
 
-      const otherStatusTasks = currentDashTasks.filter(t => t.id !== taskId && t.status !== targetStatus);
-      const targetStatusTasks = currentDashTasks
-        .filter(t => t.id !== taskId && t.status === targetStatus)
-        .sort((a, b) => a.order - b.order);
-
-      if (targetIndex !== undefined && targetIndex >= 0) {
-        targetStatusTasks.splice(targetIndex, 0, updatedTask);
-      } else {
-        targetStatusTasks.push(updatedTask);
+      const isCompleted = targetStatus === 'done' && task.status !== 'done';
+      if (isCompleted) {
+        confetti({
+          particleCount: 80,
+          spread: 60,
+          origin: { y: 0.6 },
+          colors: ['#F5B942', '#D99A1C', '#FFFFFF'],
+        });
       }
 
-      const reorderedTarget = targetStatusTasks.map((t, idx) => ({ ...t, order: idx + 1 }));
+      const updatedTask = {
+        ...task,
+        status: targetStatus,
+        progress: targetStatus === 'done' ? 100 : task.progress,
+      };
 
-      // Persist reordered tasks
-      reorderedTarget.forEach(t => dbService.saveTask(t));
+      const remaining = prev.filter(t => t.id !== taskId);
+      let newTasks: TaskItem[];
 
-      return [...otherDashboardTasks, ...otherStatusTasks, ...reorderedTarget];
+      if (targetIndex !== undefined) {
+        const targetColTasks = remaining.filter(
+          t => t.dashboardId === task.dashboardId && t.status === targetStatus
+        );
+        targetColTasks.splice(targetIndex, 0, updatedTask);
+        const otherTasks = remaining.filter(
+          t => !(t.dashboardId === task.dashboardId && t.status === targetStatus)
+        );
+        newTasks = [...otherTasks, ...targetColTasks];
+      } else {
+        newTasks = [...remaining, updatedTask];
+      }
+
+      dbService.saveTask(updatedTask);
+      return newTasks;
     });
-
-    showToast(`Task moved to ${targetStatus.replace('_', ' ').toUpperCase()}`);
   };
 
   const toggleSubtask = async (taskId: string, subtaskId: string) => {
     setTasks(prev =>
-      prev.map(t => {
-        if (t.id !== taskId) return t;
-        const subtasks = t.subtasks.map(st =>
-          st.id === subtaskId ? { ...st, completed: !st.completed } : st
-        );
-        const completedCount = subtasks.filter(st => st.completed).length;
-        const progress = subtasks.length > 0 ? Math.round((completedCount / subtasks.length) * 100) : t.progress;
-        const updated = { ...t, subtasks, progress };
-        dbService.saveTask(updated);
-        return updated;
+      prev.map(task => {
+        if (task.id === taskId) {
+          const updatedSubtasks = task.subtasks.map(st =>
+            st.id === subtaskId ? { ...st, completed: !st.completed } : st
+          );
+          const completedCount = updatedSubtasks.filter(st => st.completed).length;
+          const progress = updatedSubtasks.length > 0
+            ? Math.round((completedCount / updatedSubtasks.length) * 100)
+            : task.progress;
+
+          const updated = {
+            ...task,
+            subtasks: updatedSubtasks,
+            progress,
+            status: progress === 100 ? ('done' as TaskStatus) : task.status,
+          };
+          dbService.saveTask(updated);
+          return updated;
+        }
+        return task;
       })
     );
   };
 
   const addSubtask = async (taskId: string, title: string) => {
     setTasks(prev =>
-      prev.map(t => {
-        if (t.id !== taskId) return t;
-        const newSt = { id: `st-${Date.now()}`, title, completed: false };
-        const subtasks = [...t.subtasks, newSt];
-        const updated = { ...t, subtasks };
-        dbService.saveTask(updated);
-        return updated;
+      prev.map(task => {
+        if (task.id === taskId) {
+          const newSubtask = {
+            id: `st-${Date.now()}`,
+            title,
+            completed: false,
+          };
+          const updatedSubtasks = [...task.subtasks, newSubtask];
+          const updated = { ...task, subtasks: updatedSubtasks };
+          dbService.saveTask(updated);
+          return updated;
+        }
+        return task;
       })
     );
-    showToast('Subtask checklist item added');
   };
 
   const addComment = async (taskId: string, text: string) => {
     setTasks(prev =>
-      prev.map(t => {
-        if (t.id !== taskId) return t;
-        const comment = {
-          id: `c-${Date.now()}`,
-          userName: user.name,
-          userInitials: user.initials,
-          text,
-          createdAt: 'Just now',
-        };
-        const updated = { ...t, comments: [...t.comments, comment] };
-        dbService.saveTask(updated);
-        return updated;
+      prev.map(task => {
+        if (task.id === taskId) {
+          const newComment = {
+            id: `cmt-${Date.now()}`,
+            userName: user.name,
+            userInitials: user.initials,
+            text,
+            createdAt: new Date().toISOString(),
+          };
+          const updated = { ...task, comments: [...task.comments, newComment] };
+          dbService.saveTask(updated);
+          return updated;
+        }
+        return task;
       })
     );
-    showToast('Comment posted');
   };
 
-  // MyVault Handlers
+  // MyVault
   const toggleSelectFile = (fileId: string) => {
     setSelectedFileIds(prev =>
       prev.includes(fileId) ? prev.filter(id => id !== fileId) : [...prev, fileId]
@@ -959,7 +1183,9 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const selectAllFiles = () => {
-    const visibleFiles = files.filter(f => currentFolderId === null || f.folderId === currentFolderId);
+    const visibleFiles = currentFolderId
+      ? files.filter(f => f.folderId === currentFolderId)
+      : files;
     setSelectedFileIds(visibleFiles.map(f => f.id));
   };
 
@@ -967,10 +1193,10 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     setSelectedFileIds([]);
   };
 
-  const addFolder = async (name: string, parentId: string | null = currentFolderId, color = '#8b5cf6') => {
+  const addFolder = async (name: string, parentId: string | null = null, color: string = '#F5B942') => {
     const newFolder: VaultFolder = {
-      id: `f-${Date.now()}`,
-      name: name.trim(),
+      id: `folder-${Date.now()}`,
+      name,
       parentId,
       color,
       createdAt: new Date().toISOString(),
@@ -978,148 +1204,129 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     setFolders(prev => [...prev, newFolder]);
     await dbService.saveFolder(newFolder);
     showToast(`Folder "${name}" created`);
-    addNotification('Folder Created', `Folder "${name}" was created in MyVault.`, 'success');
   };
 
   const renameFolder = async (id: string, newName: string) => {
     setFolders(prev =>
       prev.map(f => {
         if (f.id === id) {
-          const updated = { ...f, name: newName.trim() };
+          const updated = { ...f, name: newName };
           dbService.saveFolder(updated);
           return updated;
         }
         return f;
       })
     );
-    showToast('Folder renamed');
+    showToast(`Folder renamed to "${newName}"`);
   };
 
   const deleteFolder = async (id: string) => {
-    const findDescendants = (parentId: string): string[] => {
-      const children = folders.filter(f => f.parentId === parentId).map(f => f.id);
-      return [parentId, ...children.flatMap(findDescendants)];
-    };
-    const folderIdsToDelete = findDescendants(id);
-
-    setFolders(prev => prev.filter(f => !folderIdsToDelete.includes(f.id)));
-    setFiles(prev => prev.filter(f => !folderIdsToDelete.includes(f.folderId)));
-
-    for (const fId of folderIdsToDelete) {
-      await dbService.deleteFolder(fId);
-    }
-
-    if (currentFolderId && folderIdsToDelete.includes(currentFolderId)) {
+    setFolders(prev => prev.filter(f => f.id !== id));
+    setFiles(prev => prev.filter(f => f.folderId !== id));
+    await dbService.deleteFolder(id);
+    if (currentFolderId === id) {
       setCurrentFolderId(null);
     }
-    showToast('Folder and contents removed', 'info');
+    showToast('Folder and its files deleted', 'info');
   };
 
-  const uploadFile = async (file: File, targetFolderId: string | null = currentFolderId): Promise<void> => {
-    const effectiveFolderId = targetFolderId || 'f-projects';
+  const uploadFile = async (file: File, folderId: string | null = null) => {
     const ext = file.name.split('.').pop()?.toLowerCase() || '';
-
     let fileType: VaultFile['fileType'] = 'other';
-    if (ext === 'pdf') fileType = 'pdf';
-    else if (['xlsx', 'xls', 'csv'].includes(ext)) fileType = 'spreadsheet';
-    else if (['docx', 'doc', 'txt', 'md', 'rtf'].includes(ext)) fileType = 'doc';
-    else if (['png', 'jpg', 'jpeg', 'svg', 'webp', 'gif'].includes(ext)) fileType = 'image';
-    else if (['zip', 'tar', 'gz', 'rar'].includes(ext)) fileType = 'archive';
-    else if (['js', 'ts', 'tsx', 'py', 'json', 'html', 'css'].includes(ext)) fileType = 'code';
 
-    const bytes = file.size;
-    let sizeFormatted = `${bytes} B`;
-    if (bytes >= 1024 * 1024) {
-      sizeFormatted = `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    } else if (bytes >= 1024) {
-      sizeFormatted = `${Math.round(bytes / 1024)} KB`;
-    }
+    if (['pdf'].includes(ext)) fileType = 'pdf';
+    else if (['doc', 'docx', 'txt', 'rtf'].includes(ext)) fileType = 'doc';
+    else if (['xls', 'xlsx', 'csv'].includes(ext)) fileType = 'spreadsheet';
+    else if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext)) fileType = 'image';
+    else if (['zip', 'rar', 'tar', 'gz', '7z'].includes(ext)) fileType = 'archive';
+    else if (['js', 'ts', 'py', 'html', 'css', 'json'].includes(ext)) fileType = 'code';
 
-    let contentDataUrl: string | undefined;
-    let textContent: string | undefined;
+    const formatSize = (bytes: number): string => {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
 
-    if (fileType === 'image') {
-      contentDataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.readAsDataURL(file);
-      });
-    } else if (['doc', 'code', 'spreadsheet'].includes(fileType) && bytes < 500000) {
-      textContent = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string || '');
-        reader.readAsText(file);
-      });
+    let dataUrl: string | undefined;
+    if (fileType === 'image' && file.size < 5 * 1024 * 1024) {
+      try {
+        dataUrl = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(file);
+        });
+      } catch {
+        // ignore
+      }
     }
 
     const newVaultFile: VaultFile = {
-      id: `file-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+      id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       name: file.name,
-      folderId: effectiveFolderId,
-      sizeBytes: bytes,
-      sizeFormatted,
+      folderId: folderId || currentFolderId || 'f-projects',
+      sizeBytes: file.size,
+      sizeFormatted: formatSize(file.size),
       fileType,
       extension: ext,
-      mimeType: file.type,
-      contentDataUrl,
-      textContent,
-      updatedAt: 'Just now',
+      contentDataUrl: dataUrl,
       createdAt: new Date().toISOString(),
+      updatedAt: 'Just now',
+      mimeType: file.type,
     };
 
     cacheFile(newVaultFile.id, file);
     setFiles(prev => [newVaultFile, ...prev]);
     await dbService.saveFile(newVaultFile, file);
-    showToast(`Uploaded "${file.name}"`);
-    addNotification('File Uploaded', `"${file.name}" saved to MyVault.`, 'success');
+    showToast(`File "${file.name}" uploaded to private vault`);
   };
 
-  const createNoteFile = async (name: string, content: string, folderId: string | null = currentFolderId) => {
-    const fileName = name.endsWith('.txt') || name.endsWith('.md') ? name : `${name}.txt`;
-    const ext = fileName.split('.').pop() || 'txt';
-    const bytes = new Blob([content]).size;
-    const sizeFormatted = bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
+  const createNoteFile = async (name: string, content: string, folderId: string | null = null) => {
+    const filename = name.endsWith('.txt') ? name : `${name}.txt`;
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
 
     const newFile: VaultFile = {
-      id: `file-${Date.now()}`,
-      name: fileName,
-      folderId: folderId || 'f-projects',
-      sizeBytes: bytes,
-      sizeFormatted,
+      id: `file-note-${Date.now()}`,
+      name: filename,
+      folderId: folderId || currentFolderId || 'f-projects',
+      sizeBytes: blob.size,
+      sizeFormatted: `${blob.size} B`,
       fileType: 'doc',
-      extension: ext,
+      extension: 'txt',
       textContent: content,
-      updatedAt: 'Just now',
       createdAt: new Date().toISOString(),
+      updatedAt: 'Just now',
+      mimeType: 'text/plain',
     };
+
+    cacheFile(newFile.id, blob);
     setFiles(prev => [newFile, ...prev]);
-    await dbService.saveFile(newFile);
-    showToast(`Note "${fileName}" created`);
+    await dbService.saveFile(newFile, blob);
+    showToast(`Note "${filename}" saved in vault`);
   };
 
   const addVaultFile = async (file: VaultFile) => {
     setFiles(prev => [file, ...prev]);
     await dbService.saveFile(file);
-    showToast(`Added "${file.name}"`);
+    showToast(`File "${file.name}" linked`);
   };
 
   const renameFile = async (id: string, newName: string) => {
     setFiles(prev =>
       prev.map(f => {
         if (f.id === id) {
-          const updated = { ...f, name: newName.trim(), updatedAt: 'Just now' };
+          const updated = { ...f, name: newName };
           dbService.saveFile(updated);
           return updated;
         }
         return f;
       })
     );
-    showToast('File renamed');
+    showToast(`File renamed to "${newName}"`);
   };
 
   const deleteFile = async (id: string) => {
     setFiles(prev => prev.filter(f => f.id !== id));
-    setSelectedFileIds(prev => prev.filter(selectedId => selectedId !== id));
+    setSelectedFileIds(prev => prev.filter(fid => fid !== id));
     await dbService.deleteFile(id);
     showToast('File deleted', 'info');
   };
@@ -1128,111 +1335,68 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     if (selectedFileIds.length === 0) return;
     const count = selectedFileIds.length;
     setFiles(prev => prev.filter(f => !selectedFileIds.includes(f.id)));
-    for (const fId of selectedFileIds) {
-      await dbService.deleteFile(fId);
+    for (const fid of selectedFileIds) {
+      await dbService.deleteFile(fid);
     }
-    showToast(`Deleted ${count} files`, 'info');
     setSelectedFileIds([]);
+    showToast(`Deleted ${count} files`, 'info');
   };
 
   const moveFile = async (fileId: string, targetFolderId: string) => {
     setFiles(prev =>
       prev.map(f => {
         if (f.id === fileId) {
-          const updated = { ...f, folderId: targetFolderId, updatedAt: 'Just now' };
+          const updated = { ...f, folderId: targetFolderId };
           dbService.saveFile(updated);
           return updated;
         }
         return f;
       })
     );
-    showToast('File moved to folder');
+    showToast('File moved');
   };
 
-  // Reset to initial demo data
-  const resetAllToDefault = async () => {
-    setCategories(INITIAL_CATEGORIES);
-    setLinks(INITIAL_LINKS);
-    setDashboards(INITIAL_DASHBOARDS);
-    setActiveDashboardId('dash-working');
-    setTasks(INITIAL_TASKS);
-    setFolders(INITIAL_FOLDERS);
-    setFiles(INITIAL_FILES);
-    setNotifications(INITIAL_NOTIFICATIONS);
-    setUser(INITIAL_USER);
-    setTheme('dark');
-    setCurrentPage('links');
-
-    safeStorage.setItem('myspace_user', JSON.stringify(INITIAL_USER));
-    safeStorage.setItem('myspace_categories', JSON.stringify(INITIAL_CATEGORIES));
-    safeStorage.setItem('myspace_links', JSON.stringify(INITIAL_LINKS));
-    safeStorage.setItem('myspace_dashboards', JSON.stringify(INITIAL_DASHBOARDS));
-    safeStorage.setItem('myspace_tasks', JSON.stringify(INITIAL_TASKS));
-    safeStorage.setItem('myspace_folders', JSON.stringify(INITIAL_FOLDERS));
-    safeStorage.setItem('myspace_files', JSON.stringify(INITIAL_FILES));
-
-    showToast('Workspace reset to factory defaults', 'info');
-    addNotification('Reset Complete', 'Default workspace data restored.', 'info');
+  // Global actions
+  const resetAllToDefault = () => {
+    if (supabaseUser) {
+      const def = getDefaultWorkspaceState(supabaseUser.email, supabaseUser.name);
+      setCategories(def.categories);
+      setLinks(def.links);
+      setDashboards(def.dashboards);
+      setTasks(def.tasks);
+      setFolders(def.folders);
+      setFiles(def.files);
+      setNotifications(def.notifications);
+      dbService.saveRawWorkspaceState(def);
+      showToast('Workspace reset to defaults');
+    }
   };
 
   const exportAllData = () => {
-    const backup = {
-      version: '1.0',
-      exportedAt: new Date().toISOString(),
-      user,
-      categories,
-      links,
-      dashboards,
-      tasks,
-      folders,
-      files,
-    };
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `myspace-backup-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('Backup JSON downloaded');
+    const raw = dbService.getRawWorkspaceState();
+    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(raw, null, 2));
+    const dlAnchor = document.createElement('a');
+    dlAnchor.setAttribute('href', dataStr);
+    dlAnchor.setAttribute('download', `myspace-export-${new Date().toISOString().split('T')[0]}.json`);
+    dlAnchor.click();
+    showToast('Export downloaded');
   };
 
   const importAllData = (jsonData: string): boolean => {
     try {
       const data = JSON.parse(jsonData);
-      if (data.categories) {
-        setCategories(data.categories);
-        safeStorage.setItem('myspace_categories', JSON.stringify(data.categories));
-      }
-      if (data.links) {
-        setLinks(data.links);
-        safeStorage.setItem('myspace_links', JSON.stringify(data.links));
-      }
-      if (data.dashboards) {
-        setDashboards(data.dashboards);
-        safeStorage.setItem('myspace_dashboards', JSON.stringify(data.dashboards));
-      }
-      if (data.tasks) {
-        setTasks(data.tasks);
-        safeStorage.setItem('myspace_tasks', JSON.stringify(data.tasks));
-      }
-      if (data.folders) {
-        setFolders(data.folders);
-        safeStorage.setItem('myspace_folders', JSON.stringify(data.folders));
-      }
-      if (data.files) {
-        setFiles(data.files);
-        safeStorage.setItem('myspace_files', JSON.stringify(data.files));
-      }
-      if (data.user) {
-        setUser(data.user);
-        safeStorage.setItem('myspace_user', JSON.stringify(data.user));
-      }
+      if (data.categories) setCategories(data.categories);
+      if (data.links) setLinks(data.links);
+      if (data.dashboards) setDashboards(data.dashboards);
+      if (data.tasks) setTasks(data.tasks);
+      if (data.folders) setFolders(data.folders);
+      if (data.files) setFiles(data.files);
+      if (data.user) setUser(data.user);
+      dbService.saveRawWorkspaceState(data);
       showToast('Workspace data imported successfully');
       return true;
-    } catch (err) {
-      console.error('Import error:', err);
-      showToast('Invalid JSON backup file', 'error');
+    } catch {
+      showToast('Invalid JSON file', 'error');
       return false;
     }
   };
@@ -1246,14 +1410,28 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
         toggleTheme,
         user,
         updateUser,
+        isAuthLoading,
         isSupabaseConfigured,
         supabaseUser,
         isAuthModalOpen,
         setIsAuthModalOpen,
         signInWithSupabase,
         signUpWithSupabase,
+        resetPasswordWithSupabase,
         signOutSupabase,
         updateSupabaseCredentials,
+        deviceId,
+        workspaceNamespace: activeNamespace,
+        isWorkspaceLocked,
+        isPinSetupNeeded,
+        setupVaultPin,
+        unlockWorkspaceWithPin,
+        lockWorkspace,
+        resetLocalWorkspace,
+        isBackupModalOpen,
+        setIsBackupModalOpen,
+        exportEncryptedBackupFile,
+        importEncryptedBackupFile,
         isSearchOpen,
         setIsSearchOpen,
         searchQuery,

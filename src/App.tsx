@@ -9,11 +9,57 @@ import { SettingsView } from './components/settings/SettingsView';
 import { GlobalSearchModal } from './components/common/GlobalSearchModal';
 import { ToastContainer } from './components/common/ToastContainer';
 import { SupabaseAuthModal } from './components/common/SupabaseAuthModal';
+import { BackupRestoreModal } from './components/common/BackupRestoreModal';
+import { AuthScreen } from './components/auth/AuthScreen';
+import { UnlockScreen } from './components/auth/UnlockScreen';
+import { MySpaceLogo } from './components/common/MySpaceLogo';
 
 const MainAppContent: React.FC = () => {
-  const { currentPage } = useMySpace();
+  const {
+    currentPage,
+    isAuthLoading,
+    supabaseUser,
+    isWorkspaceLocked,
+  } = useMySpace();
+
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
+  // 1. Initial Authentication & Security Loading State
+  if (isAuthLoading) {
+    return (
+      <div className="h-screen w-screen bg-[#070709] flex flex-col items-center justify-center text-zinc-300">
+        <div className="relative mb-4 animate-pulse">
+          <MySpaceLogo size="xl" />
+        </div>
+        <div className="flex items-center gap-2 text-xs font-semibold text-[#F5B942]">
+          <span className="w-2 h-2 rounded-full bg-[#F5B942] animate-ping" />
+          <span>Initializing MySpace Secure Workspace...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Unauthenticated: Show Login / Registration Screen
+  if (!supabaseUser) {
+    return (
+      <>
+        <AuthScreen />
+        <ToastContainer />
+      </>
+    );
+  }
+
+  // 3. Authenticated but Local Workspace Locked / First-time PIN setup
+  if (isWorkspaceLocked) {
+    return (
+      <>
+        <UnlockScreen />
+        <ToastContainer />
+      </>
+    );
+  }
+
+  // 4. Authenticated & Unlocked: Full MySpace Experience
   return (
     <div className="h-[100dvh] w-screen overflow-hidden theme-bg-main theme-text-primary flex flex-col md:flex-row antialiased selection:bg-[#F5B942]/30 selection:text-[#F5B942] transition-colors duration-200">
       {/* Persistent Left Sidebar */}
@@ -40,8 +86,11 @@ const MainAppContent: React.FC = () => {
       {/* Global Search Command Palette (Ctrl + K) */}
       <GlobalSearchModal />
 
-      {/* Supabase Connection & Auth Modal */}
+      {/* Supabase Connection Modal (for credentials tuning) */}
       <SupabaseAuthModal />
+
+      {/* Encrypted Backup & Restore Modal */}
+      <BackupRestoreModal />
 
       {/* Global Toast Feedback */}
       <ToastContainer />

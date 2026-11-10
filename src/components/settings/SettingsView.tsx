@@ -12,7 +12,13 @@ import {
   Sparkles,
   Check,
   Save,
-  Database
+  Database,
+  Lock,
+  Laptop,
+  KeyRound,
+  ShieldCheck,
+  FileArchive,
+  LogOut
 } from 'lucide-react';
 import { useMySpace } from '../../context/MySpaceContext';
 import { MySpaceLogo } from '../common/MySpaceLogo';
@@ -30,6 +36,10 @@ export const SettingsView: React.FC = () => {
     isSupabaseConfigured,
     supabaseUser,
     setIsAuthModalOpen,
+    setIsBackupModalOpen,
+    lockWorkspace,
+    signOutSupabase,
+    workspaceNamespace,
   } = useMySpace();
 
   const [name, setName] = useState(user?.name || 'Prateek Anand');
@@ -393,12 +403,87 @@ export const SettingsView: React.FC = () => {
         </div>
       </div>
 
-      {/* Data Management & Backups */}
+      {/* Device Isolation & Encryption Security */}
+      <div className="theme-bg-card border theme-border-card rounded-2xl p-6 shadow-xl space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b theme-divider">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#F5B942]/10 border border-[#F5B942]/25 flex items-center justify-center text-[#D99A1C] dark:text-[#F5B942]">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold theme-text-primary">Device-Isolated Security & Encryption</h3>
+              <p className="text-xs theme-text-muted">
+                Zero cloud data leakage • AES-256-GCM client-side encrypted storage
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={lockWorkspace}
+              className="px-3 py-1.5 rounded-xl theme-bg-card-secondary hover:theme-bg-card-hover border theme-border-card text-xs font-semibold theme-text-primary flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <Lock className="w-3.5 h-3.5 text-[#F5B942]" />
+              <span>Lock Workspace</span>
+            </button>
+            <button
+              onClick={signOutSupabase}
+              className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-xs font-semibold text-rose-300 flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <div className="p-3 rounded-xl theme-bg-card-secondary border theme-border-card space-y-1">
+            <span className="text-[11px] theme-text-muted font-medium">Storage Namespace:</span>
+            <div className="font-mono text-[11px] text-[#D99A1C] dark:text-[#F5B942] break-all">
+              {workspaceNamespace || 'myspace:device-local'}
+            </div>
+            <p className="text-[10px] theme-text-muted pt-1">
+              Data is tied exclusively to this browser device profile.
+            </p>
+          </div>
+
+          <div className="p-3 rounded-xl theme-bg-card-secondary border theme-border-card space-y-1">
+            <span className="text-[11px] theme-text-muted font-medium">Cryptographic Engine:</span>
+            <div className="font-mono text-[11px] text-emerald-400">
+              AES-256-GCM + PBKDF2 (100k iter)
+            </div>
+            <p className="text-[10px] theme-text-muted pt-1">
+              Encrypted before saving to browser IndexedDB with non-extractable key.
+            </p>
+          </div>
+        </div>
+
+        {/* Encrypted Portability Action */}
+        <div className="p-4 rounded-xl border border-[#F5B942]/30 bg-gradient-to-r from-[#F5B942]/5 to-transparent flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-[#F5B942]/20 flex items-center justify-center text-[#F5B942]">
+              <FileArchive className="w-4 h-4" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold theme-text-primary">Encrypted Backup & Cross-Device Portability</h4>
+              <p className="text-[11px] theme-text-muted">Export password-protected <code className="text-[#F5B942]">.myspace.enc</code> package including all bookmarks, tasks, and vault files.</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setIsBackupModalOpen(true)}
+            className="px-4 py-2 gold-btn text-xs font-bold rounded-xl shadow-md whitespace-nowrap cursor-pointer shrink-0"
+          >
+            Open Backup Tool
+          </button>
+        </div>
+      </div>
+
+      {/* Standard JSON Data Management */}
       <div className="theme-bg-card border theme-border-card rounded-2xl p-6 shadow-xl space-y-4">
         <div className="pb-3 border-b theme-divider">
-          <h3 className="text-base font-bold theme-text-primary">Data & Backups</h3>
+          <h3 className="text-base font-bold theme-text-primary">Unencrypted JSON Exports</h3>
           <p className="text-xs theme-text-muted">
-            Export or restore all bookmarks, tasks, and document metadata as JSON
+            Export or restore workspace entities as standard JSON
           </p>
         </div>
 
@@ -408,8 +493,8 @@ export const SettingsView: React.FC = () => {
             className="p-4 theme-bg-card-secondary hover:theme-bg-card-hover border theme-border-card rounded-xl flex flex-col items-center justify-center gap-2 text-center transition-all group"
           >
             <Download className="w-5 h-5 text-[#D99A1C] dark:text-[#F5B942] group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-semibold theme-text-primary">Export Backup</span>
-            <span className="text-[10px] theme-text-muted">Download complete workspace JSON</span>
+            <span className="text-xs font-semibold theme-text-primary">Export JSON</span>
+            <span className="text-[10px] theme-text-muted">Download raw JSON file</span>
           </button>
 
           <button
@@ -417,8 +502,8 @@ export const SettingsView: React.FC = () => {
             className="p-4 theme-bg-card-secondary hover:theme-bg-card-hover border theme-border-card rounded-xl flex flex-col items-center justify-center gap-2 text-center transition-all group"
           >
             <Upload className="w-5 h-5 text-[#D99A1C] dark:text-[#F5B942] group-hover:scale-110 transition-transform" />
-            <span className="text-xs font-semibold theme-text-primary">Restore Backup</span>
-            <span className="text-[10px] theme-text-muted">Import from a JSON file</span>
+            <span className="text-xs font-semibold theme-text-primary">Restore JSON</span>
+            <span className="text-[10px] theme-text-muted">Import from raw JSON</span>
           </button>
 
           <button

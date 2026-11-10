@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Search,
   Bell,
@@ -11,7 +11,13 @@ import {
   Settings,
   Check,
   Trash2,
-  ExternalLink
+  ExternalLink,
+  Lock,
+  LogOut,
+  HardDrive,
+  Download,
+  Shield,
+  Laptop
 } from 'lucide-react';
 import { useMySpace } from '../../context/MySpaceContext';
 import { MySpaceLogo } from '../common/MySpaceLogo';
@@ -27,6 +33,11 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
     theme,
     toggleTheme,
     user,
+    supabaseUser,
+    workspaceNamespace,
+    lockWorkspace,
+    signOutSupabase,
+    setIsBackupModalOpen,
     setIsSearchOpen,
     notifications,
     unreadNotifsCount,
@@ -36,6 +47,18 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
   } = useMySpace();
 
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const profileRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+        setIsProfileOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const getPageMeta = () => {
     switch (currentPage) {
@@ -236,14 +259,98 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
           )}
         </button>
 
-        {/* User Avatar Circle */}
-        <button
-          onClick={() => setCurrentPage('settings')}
-          className="w-9 h-9 rounded-full bg-gradient-to-tr from-[#D6AD60] to-[#F5B942] text-[#0A0A0A] font-bold text-xs flex items-center justify-center ring-2 ring-[#F5B942]/40 shadow-md shadow-[#F5B942]/10 hover:scale-105 transition-transform"
-          title={`Signed in as ${user.name}`}
-        >
-          {user.initials}
-        </button>
+        {/* User Profile Menu with Lock & Backup */}
+        <div className="relative" ref={profileRef}>
+          <button
+            onClick={() => setIsProfileOpen(!isProfileOpen)}
+            className="w-9 h-9 rounded-full bg-gradient-to-tr from-[#D6AD60] to-[#F5B942] text-[#0A0A0A] font-bold text-xs flex items-center justify-center ring-2 ring-[#F5B942]/40 shadow-md shadow-[#F5B942]/10 hover:scale-105 transition-transform cursor-pointer"
+            title={`Account: ${user.name}`}
+            aria-label="User Account Menu"
+          >
+            {user.initials}
+          </button>
+
+          {isProfileOpen && (
+            <div className="absolute right-0 mt-2 w-72 rounded-2xl theme-bg-card border theme-border-card shadow-2xl p-2 z-50 animate-in fade-in zoom-in-95 text-xs">
+              {/* User Identity info */}
+              <div className="p-3 rounded-xl theme-bg-card-secondary mb-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-[#D6AD60] to-[#F5B942] text-black font-bold text-xs flex items-center justify-center shrink-0">
+                    {user.initials}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-bold theme-text-primary truncate">{user.name}</p>
+                    <p className="text-[11px] theme-text-muted truncate">{supabaseUser?.email || user.email}</p>
+                  </div>
+                </div>
+
+                <div className="mt-2.5 pt-2 border-t theme-divider flex items-center gap-1.5 text-[10px] theme-text-muted font-mono">
+                  <Laptop className="w-3 h-3 text-[#F5B942] shrink-0" />
+                  <span className="truncate" title={workspaceNamespace}>
+                    {workspaceNamespace
+                      ? workspaceNamespace.replace('myspace:', '').slice(0, 22) + '...'
+                      : 'local-device'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="space-y-1">
+                <button
+                  onClick={() => {
+                    setIsProfileOpen(false);
+                    lockWorkspace();
+                  }}
+                  className="w-full px-3 py-2 rounded-xl text-left theme-text-primary hover:theme-bg-card-hover flex items-center justify-between transition-colors group"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Lock className="w-4 h-4 text-[#F5B942]" />
+                    <span className="font-semibold">Lock Workspace</span>
+                  </div>
+                  <span className="text-[10px] theme-text-muted">PIN Lock</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setIsProfileOpen(false);
+                    setIsBackupModalOpen(true);
+                  }}
+                  className="w-full px-3 py-2 rounded-xl text-left theme-text-primary hover:theme-bg-card-hover flex items-center justify-between transition-colors group"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Download className="w-4 h-4 text-[#F5B942]" />
+                    <span className="font-semibold">Encrypted Backup & Portability</span>
+                  </div>
+                  <span className="text-[10px] theme-text-muted">.enc</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setIsProfileOpen(false);
+                    setCurrentPage('settings');
+                  }}
+                  className="w-full px-3 py-2 rounded-xl text-left theme-text-primary hover:theme-bg-card-hover flex items-center gap-2.5 transition-colors"
+                >
+                  <Settings className="w-4 h-4 text-zinc-400" />
+                  <span>Account & Preferences</span>
+                </button>
+
+                <div className="my-1 border-t theme-divider" />
+
+                <button
+                  onClick={() => {
+                    setIsProfileOpen(false);
+                    signOutSupabase();
+                  }}
+                  className="w-full px-3 py-2 rounded-xl text-left text-rose-400 hover:bg-rose-500/10 flex items-center gap-2.5 transition-colors"
+                >
+                  <LogOut className="w-4 h-4 text-rose-400" />
+                  <span className="font-semibold">Sign Out</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );
