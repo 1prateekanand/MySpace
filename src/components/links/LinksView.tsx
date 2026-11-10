@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Plus,
   LayoutGrid,
@@ -8,18 +8,33 @@ import {
   Code2,
   BookOpen,
   Youtube,
-  Folder,
-  MoreVertical,
-  ExternalLink,
-  Edit2,
-  Trash2,
-  Star,
-  GripVertical
+  Folder
 } from 'lucide-react';
+import {
+  DndContext,
+  DragOverlay,
+  pointerWithin,
+  closestCorners,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragStartEvent,
+  DragOverEvent,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  rectSortingStrategy,
+} from '@dnd-kit/sortable';
 import { useMySpace } from '../../context/MySpaceContext';
 import { BookmarkLink, LinkCategory } from '../../types';
 import { AddEditLinkModal } from './AddEditLinkModal';
 import { AddEditCategoryModal } from './AddEditCategoryModal';
+import { ConfirmModal } from '../common/ConfirmModal';
+import { GoogleSearchBar } from './GoogleSearchBar';
+import { CategoryCard, getCategoryIcon } from './CategoryCard';
+import { CategoryDetailView } from './CategoryDetailView';
+import { LinkTile } from './LinkTile';
 
 export const LinksView: React.FC = () => {
   const {
@@ -31,7 +46,10 @@ export const LinksView: React.FC = () => {
     togglePinLink,
     trackLinkClick,
     deleteCategory,
-    updateLink,
+    reorderCategories,
+    reorderLinks,
+    moveLink,
+    showToast,
   } = useMySpace();
 
   // Modals state
@@ -42,27 +60,39 @@ export const LinksView: React.FC = () => {
   const [isAddCategoryOpen, setIsAddCategoryOpen] = useState(false);
   const [categoryToEdit, setCategoryToEdit] = useState<LinkCategory | null>(null);
 
-  const [activeCategoryMenuId, setActiveCategoryMenuId] = useState<string | null>(null);
+  // Delete Link Confirm Modal state
+  const [linkToDelete, setLinkToDelete] = useState<BookmarkLink | null>(null);
+  const [isDeleteLinkModalOpen, setIsDeleteLinkModalOpen] = useState(false);
+  const [isDeletingLink, setIsDeletingLink] = useState(false);
 
-  // Drag and drop state for links
-  const [draggedLinkId, setDraggedLinkId] = useState<string | null>(null);
+  // Delete Category Confirm Modal state
+  const [categoryToDelete, setCategoryToDelete] = useState<LinkCategory | null>(null);
+  const [isDeleteCategoryModalOpen, setIsDeleteCategoryModalOpen] = useState(false);
+  const [migrateCategoryId, setMigrateCategoryId] = useState<string>('delete_all');
+  const [isDeletingCategory, setIsDeletingCategory] = useState(false);
 
-  const getCategoryIcon = (iconName: string, className = 'w-4 h-4') => {
-    switch (iconName) {
-      case 'TrendingUp': return <TrendingUp className={className} />;
-      case 'Newspaper': return <Newspaper className={className} />;
-      case 'Cpu': return <Cpu className={className} />;
-      case 'Code2': return <Code2 className={className} />;
-      case 'BookOpen': return <BookOpen className={className} />;
-      case 'Youtube': return <Youtube className={className} />;
-      default: return <Folder className={className} />;
-    }
-  };
+  // Copy Feedback state
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
 
-  // Filter categories to display
-  const displayedCategories = selectedCategoryFilter === 'all'
-    ? categories
-    : categories.filter(c => c.id === selectedCategoryFilter);
+  // Drag and drop state
+  const [activeDragType, setActiveDragType] = useState<'category' | 'link' | null>(null);
+  const [activeCategory, setActiveCategory] = useState<LinkCategory | null>(null);
+  const [activeLink, setActiveLink] = useState<BookmarkLink | null>(null);
+  const [overCategoryId, setOverCategoryId] = useState<string | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    })
+  );
+
+  // Selected category object for dedicated page
+  const selectedCategoryObj = useMemo(() => {
+    if (selectedCategoryFilter === 'all') return null;
+    return categories.find((c) => c.id === selectedCategoryFilter) || null;
+  }, [categories, selectedCategoryFilter]);
 
   const handleOpenAddLink = (catId?: string) => {
     setTargetCategoryId(catId || (categories[0]?.id ?? ''));
@@ -72,20 +102,78 @@ export const LinksView: React.FC = () => {
 
   const handleOpenEditLink = (e: React.MouseEvent, link: BookmarkLink) => {
     e.stopPropagation();
+    e.preventDefault();
     setLinkToEdit(link);
     setIsAddLinkOpen(true);
   };
 
-  const handleDeleteLink = (e: React.MouseEvent, id: string) => {
+  // Trigger Delete Link Modal
+  const handleRequestDeleteLink = (e: React.MouseEvent, link: BookmarkLink) => {
     e.stopPropagation();
-    if (confirm('Delete this bookmark?')) {
-      deleteLink(id);
+    e.preventDefault();
+    setLinkToDelete(link);
+    setIsDeleteLinkModalOpen(true);
+  };
+
+  // Execute Delete Link
+  const handleConfirmDeleteLink = async () => {
+    if (!linkToDelete || isDeletingLink) return;
+    setIsDeletingLink(true);
+    try {
+      const success = await deleteLink(linkToDelete.id);
+      if (success) {
+        setIsDeleteLinkModalOpen(false);
+        setLinkToDelete(null);
+      }
+    } finally {
+      setIsDeletingLink(false);
+    }
+  };
+
+  // Trigger Delete Category Modal
+  const handleRequestDeleteCategory = (category: LinkCategory) => {
+    setCategoryToDelete(category);
+    const otherCategories = categories.filter((c) => c.id !== category.id);
+    setMigrateCategoryId(otherCategories[0]?.id || 'delete_all');
+    setIsDeleteCategoryModalOpen(true);
+  };
+
+  // Execute Delete Category
+  const handleConfirmDeleteCategory = async () => {
+    if (!categoryToDelete || isDeletingCategory) return;
+    setIsDeletingCategory(true);
+    try {
+      const targetMove = migrateCategoryId !== 'delete_all' ? migrateCategoryId : undefined;
+      const success = await deleteCategory(categoryToDelete.id, targetMove);
+      if (success) {
+        setIsDeleteCategoryModalOpen(false);
+        setCategoryToDelete(null);
+        if (selectedCategoryFilter === categoryToDelete.id) {
+          setSelectedCategoryFilter('all');
+        }
+      }
+    } finally {
+      setIsDeletingCategory(false);
     }
   };
 
   const handleTogglePin = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
+    e.preventDefault();
     togglePinLink(id);
+  };
+
+  const handleCopyUrl = async (e: React.MouseEvent, link: BookmarkLink) => {
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      await navigator.clipboard.writeText(link.url);
+      setCopiedLinkId(link.id);
+      showToast(`Copied URL: ${link.url}`, 'info');
+      setTimeout(() => setCopiedLinkId(null), 2000);
+    } catch {
+      showToast('Could not copy to clipboard', 'warning');
+    }
   };
 
   const handleLinkClick = (link: BookmarkLink) => {
@@ -93,273 +181,324 @@ export const LinksView: React.FC = () => {
     window.open(link.url, '_blank', 'noopener,noreferrer');
   };
 
-  // Drag and drop handlers
-  const handleDragStart = (e: React.DragEvent, linkId: string) => {
-    setDraggedLinkId(linkId);
-    e.dataTransfer.setData('text/plain', linkId);
-    e.dataTransfer.effectAllowed = 'move';
+  // =================== DRAG AND DROP HANDLERS ===================
+  const handleDragStart = (event: DragStartEvent) => {
+    const { active } = event;
+    const activeData = active.data.current;
+
+    if (activeData?.type === 'category') {
+      setActiveDragType('category');
+      setActiveCategory(activeData.category);
+    } else if (activeData?.type === 'link') {
+      setActiveDragType('link');
+      setActiveLink(activeData.link);
+    }
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
+  const handleDragOver = (event: DragOverEvent) => {
+    const { over } = event;
+    if (!over) {
+      setOverCategoryId(null);
+      return;
+    }
+
+    const overData = over.data.current;
+    if (overData?.type === 'category') {
+      setOverCategoryId(overData.category.id);
+    } else if (overData?.type === 'category-drop-target') {
+      setOverCategoryId(overData.categoryId);
+    } else if (overData?.type === 'link') {
+      setOverCategoryId(overData.categoryId);
+    } else {
+      const overIdStr = String(over.id);
+      const matchedCat = categories.find((c) => c.id === overIdStr);
+      if (matchedCat) {
+        setOverCategoryId(matchedCat.id);
+      }
+    }
   };
 
-  const handleDropOnCategory = (e: React.DragEvent, categoryId: string) => {
-    e.preventDefault();
-    const linkId = e.dataTransfer.getData('text/plain') || draggedLinkId;
-    if (linkId) {
-      updateLink(linkId, { categoryId });
-      setDraggedLinkId(null);
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    const dragType = activeDragType;
+
+    setActiveDragType(null);
+    setActiveCategory(null);
+    setActiveLink(null);
+    setOverCategoryId(null);
+
+    if (!over) return;
+
+    // 1. REORDERING CATEGORY BOARDS
+    if (dragType === 'category') {
+      const activeId = String(active.id);
+      const overId = String(over.id);
+
+      if (activeId === overId) return;
+
+      const oldIndex = categories.findIndex((c) => c.id === activeId);
+      const newIndex = categories.findIndex((c) => c.id === overId);
+
+      if (oldIndex !== -1 && newIndex !== -1) {
+        const updated = [...categories];
+        const [moved] = updated.splice(oldIndex, 1);
+        updated.splice(newIndex, 0, moved);
+        await reorderCategories(updated);
+        showToast('Category boards rearranged', 'info');
+      }
+      return;
+    }
+
+    // 2. REORDERING OR MOVING LINKS
+    if (dragType === 'link') {
+      const activeLinkId = String(active.id);
+      const draggedLink = links.find((l) => l.id === activeLinkId);
+      if (!draggedLink) return;
+
+      const sourceCategoryId = draggedLink.categoryId;
+      const overData = over.data.current;
+
+      let targetCatId: string | null = null;
+      let targetIndex: number | undefined = undefined;
+
+      if (overData?.type === 'link') {
+        const overLink = overData.link as BookmarkLink;
+        targetCatId = overLink.categoryId;
+        const targetLinks = links.filter((l) => l.categoryId === targetCatId);
+        targetIndex = targetLinks.findIndex((l) => l.id === overLink.id);
+      } else if (overData?.type === 'category-drop-target') {
+        targetCatId = overData.categoryId;
+      } else if (overData?.type === 'category') {
+        targetCatId = overData.category.id;
+      } else {
+        const overIdStr = String(over.id);
+        const matched = categories.find((c) => c.id === overIdStr);
+        if (matched) targetCatId = matched.id;
+      }
+
+      if (!targetCatId) return;
+
+      // Case A: Reordering within the SAME category
+      if (sourceCategoryId === targetCatId) {
+        if (overData?.type === 'link' && active.id !== over.id) {
+          const categoryLinks = links
+            .filter((l) => l.categoryId === sourceCategoryId)
+            .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+          const oldIdx = categoryLinks.findIndex((l) => l.id === activeLinkId);
+          const newIdx = categoryLinks.findIndex((l) => l.id === over.id);
+
+          if (oldIdx !== -1 && newIdx !== -1) {
+            const reordered = [...categoryLinks];
+            const [moved] = reordered.splice(oldIdx, 1);
+            reordered.splice(newIdx, 0, moved);
+            await reorderLinks(sourceCategoryId, reordered);
+            showToast('Bookmarks reordered', 'info');
+          }
+        }
+      } else {
+        // Case B: Moving to a DIFFERENT category
+        await moveLink(activeLinkId, targetCatId, targetIndex);
+      }
     }
   };
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
-      {/* Category Tabs & Action Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
-        {/* Category Filter Pills */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 scrollbar-none">
-          <button
-            onClick={() => setSelectedCategoryFilter('all')}
-            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
-              selectedCategoryFilter === 'all'
-                ? 'bg-gradient-to-r from-purple-700 to-indigo-600 text-white shadow-md shadow-purple-900/40 border border-purple-500/40'
-                : 'bg-[#161c2e] text-slate-400 hover:text-slate-200 border border-slate-700/60 hover:bg-slate-800/60'
-            }`}
-          >
-            <LayoutGrid className="w-3.5 h-3.5" />
-            <span>All Links</span>
-          </button>
-
-          {categories.map((cat) => {
-            const isSelected = selectedCategoryFilter === cat.id;
-            return (
-              <button
-                key={cat.id}
-                onClick={() => setSelectedCategoryFilter(cat.id)}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
-                  isSelected
-                    ? 'bg-gradient-to-r from-purple-700 to-indigo-600 text-white shadow-md shadow-purple-900/40 border border-purple-500/40'
-                    : 'bg-[#161c2e] text-slate-400 hover:text-slate-200 border border-slate-700/60 hover:bg-slate-800/60'
+    <div className="h-full min-h-0 flex flex-col overflow-hidden max-w-7xl w-full mx-auto">
+      {/* Fixed Header Elements: Category Tabs, Action Buttons & Google Search Bar */}
+      <div className="shrink-0 p-4 sm:p-6 lg:p-8 pb-3 space-y-4">
+        {/* Category Tabs & Action Bar */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* Category Filter Pills */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 lg:pb-0 scrollbar-none">
+            <button
+              onClick={() => setSelectedCategoryFilter('all')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                selectedCategoryFilter === 'all'
+                  ? 'gold-pill-active'
+                  : 'theme-bg-card theme-text-secondary hover:theme-text-primary border theme-border-card hover:theme-bg-card-hover'
+              }`}
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>All Links</span>
+              <span
+                className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                  selectedCategoryFilter === 'all'
+                    ? 'bg-black/20 dark:bg-black/30'
+                    : 'theme-bg-card-secondary theme-text-muted border theme-border-card'
                 }`}
               >
-                <span style={{ color: isSelected ? '#ffffff' : cat.color }}>
-                  {getCategoryIcon(cat.icon, 'w-3.5 h-3.5')}
-                </span>
-                <span>{cat.name}</span>
-              </button>
-            );
-          })}
+                {links.length}
+              </span>
+            </button>
 
-          <button
-            onClick={() => {
-              setCategoryToEdit(null);
-              setIsAddCategoryOpen(true);
-            }}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-slate-200 bg-[#161c2e]/60 hover:bg-[#161c2e] border border-dashed border-slate-700 hover:border-slate-500 transition-colors whitespace-nowrap"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Add Category</span>
-          </button>
+            {categories.map((cat) => {
+              const isSelected = selectedCategoryFilter === cat.id;
+              const count = links.filter((l) => l.categoryId === cat.id).length;
+              return (
+                <button
+                  key={cat.id}
+                  onClick={() => setSelectedCategoryFilter(cat.id)}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                    isSelected
+                      ? 'gold-pill-active'
+                      : 'theme-bg-card theme-text-secondary hover:theme-text-primary border theme-border-card hover:theme-bg-card-hover'
+                  }`}
+                >
+                  <span className={isSelected ? 'text-inherit' : 'text-[#D99A1C] dark:text-[#F5B942]'}>
+                    {getCategoryIcon(cat.icon, 'w-3.5 h-3.5')}
+                  </span>
+                  <span>{cat.name}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                      isSelected
+                        ? 'bg-black/20 dark:bg-black/30'
+                        : 'theme-bg-card-secondary theme-text-muted border theme-border-card'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+
+            <button
+              onClick={() => {
+                setCategoryToEdit(null);
+                setIsAddCategoryOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium theme-text-muted hover:theme-text-primary theme-bg-card hover:theme-bg-card-hover border border-dashed theme-border-card hover:border-[#F5B942]/60 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5 text-[#F5B942]" />
+              <span>Add Category</span>
+            </button>
+          </div>
+
+          {/* Right: Add Link CTA */}
+          <div className="flex items-center shrink-0">
+            <button
+              onClick={() => handleOpenAddLink(selectedCategoryFilter !== 'all' ? selectedCategoryFilter : undefined)}
+              className="gold-btn flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs tracking-wide shrink-0 cursor-pointer shadow-md"
+            >
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>Add Link</span>
+            </button>
+          </div>
         </div>
 
-        {/* Primary Add Link Button */}
-        <button
-          onClick={() => handleOpenAddLink()}
-          className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs tracking-wide shadow-lg shadow-purple-900/40 transition-all hover:scale-[1.02] shrink-0"
-        >
-          <Plus className="w-4 h-4 stroke-[2.5]" />
-          <span>Add Link</span>
-        </button>
+        {/* Google Search Bar - Fixed and always visible */}
+        <GoogleSearchBar />
       </div>
 
-      {/* Category Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {displayedCategories.map((category) => {
-          const categoryLinks = links.filter((l) => l.categoryId === category.id);
-          const isMenuOpen = activeCategoryMenuId === category.id;
+      {/* Scrollable Main Area: Category Boards Grid OR Dedicated Category Links Grid */}
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 lg:px-8 pb-8 custom-scrollbar">
+        {selectedCategoryObj ? (
+          /* Dedicated Full-Page Category View */
+          <CategoryDetailView
+            category={selectedCategoryObj}
+            links={links
+              .filter((l) => l.categoryId === selectedCategoryObj.id)
+              .sort((a, b) => (a.order || 0) - (b.order || 0))}
+            onBackToAll={() => setSelectedCategoryFilter('all')}
+            onAddLink={(catId) => handleOpenAddLink(catId)}
+            onEditCategory={(cat) => {
+              setCategoryToEdit(cat);
+              setIsAddCategoryOpen(true);
+            }}
+            onOpenLink={handleLinkClick}
+            onTogglePinLink={handleTogglePin}
+            onCopyLinkUrl={handleCopyUrl}
+            onEditLink={handleOpenEditLink}
+            onDeleteLink={handleRequestDeleteLink}
+            onReorderLinks={reorderLinks}
+            copiedLinkId={copiedLinkId}
+          />
+        ) : (
+          /* All Links Dashboard with Draggable Fixed-Height Category Boards */
+          <DndContext
+            sensors={sensors}
+            collisionDetection={pointerWithin || closestCorners}
+            onDragStart={handleDragStart}
+            onDragOver={handleDragOver}
+            onDragEnd={handleDragEnd}
+          >
+          {/* Draggable Category Cards Grid (Horizontal and Vertical Reordering) */}
+          <SortableContext items={categories.map((c) => c.id)} strategy={rectSortingStrategy}>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 items-stretch">
+              {categories.map((category) => {
+                const categoryLinks = links
+                  .filter((l) => l.categoryId === category.id)
+                  .sort((a, b) => (a.order || 0) - (b.order || 0));
 
-          return (
-            <div
-              key={category.id}
-              onDragOver={handleDragOver}
-              onDrop={(e) => handleDropOnCategory(e, category.id)}
-              className="bg-[#131929] border border-slate-800/90 rounded-2xl p-5 hover:border-slate-700/80 transition-all shadow-xl flex flex-col justify-between group"
-            >
-              <div>
-                {/* Category Card Header */}
-                <div className="flex items-center justify-between pb-4 border-b border-slate-800/80">
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="w-10 h-10 rounded-xl flex items-center justify-center shadow-md ring-1 ring-white/10"
-                      style={{ backgroundColor: `${category.color}25`, color: category.color }}
-                    >
-                      {getCategoryIcon(category.icon, 'w-5 h-5')}
-                    </div>
-                    <div>
-                      <h3 className="text-base font-bold text-white tracking-tight">
-                        {category.name}
-                      </h3>
-                      <p className="text-xs text-slate-400">
-                        {categoryLinks.length} {categoryLinks.length === 1 ? 'link' : 'links'}
-                      </p>
-                    </div>
-                  </div>
+                const isHighlighted = overCategoryId === category.id;
 
-                  {/* Actions Dropdown */}
-                  <div className="relative">
-                    <button
-                      onClick={() =>
-                        setActiveCategoryMenuId(isMenuOpen ? null : category.id)
-                      }
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/60 transition-colors"
-                    >
-                      <MoreVertical className="w-4 h-4" />
-                    </button>
-
-                    {isMenuOpen && (
-                      <div className="absolute right-0 mt-2 w-44 bg-[#1a2238] border border-slate-700 rounded-xl shadow-2xl p-1.5 z-30 animate-in fade-in-50 zoom-in-95">
-                        <button
-                          onClick={() => {
-                            setActiveCategoryMenuId(null);
-                            handleOpenAddLink(category.id);
-                          }}
-                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-slate-200 hover:bg-slate-800 transition-colors text-left"
-                        >
-                          <Plus className="w-3.5 h-3.5 text-purple-400" />
-                          Add Link Here
-                        </button>
-                        <button
-                          onClick={() => {
-                            setActiveCategoryMenuId(null);
-                            setCategoryToEdit(category);
-                            setIsAddCategoryOpen(true);
-                          }}
-                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-slate-200 hover:bg-slate-800 transition-colors text-left"
-                        >
-                          <Edit2 className="w-3.5 h-3.5 text-blue-400" />
-                          Edit Category
-                        </button>
-                        <button
-                          onClick={() => {
-                            setActiveCategoryMenuId(null);
-                            if (confirm(`Delete category "${category.name}" and all its links?`)) {
-                              deleteCategory(category.id);
-                            }
-                          }}
-                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-rose-400 hover:bg-rose-950/30 transition-colors text-left"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                          Delete Category
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Bookmark Tiles Grid */}
-                <div className="pt-4 grid grid-cols-4 gap-2.5 min-h-[140px] content-start">
-                  {categoryLinks.length === 0 ? (
-                    <div className="col-span-4 py-8 text-center text-xs text-slate-500">
-                      No links in this category yet.
-                      <div className="mt-2">
-                        <button
-                          onClick={() => handleOpenAddLink(category.id)}
-                          className="text-purple-400 hover:underline text-xs inline-flex items-center gap-1"
-                        >
-                          <Plus className="w-3 h-3" /> Add first link
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    categoryLinks.map((link) => (
-                      <div
-                        key={link.id}
-                        draggable
-                        onDragStart={(e) => handleDragStart(e, link.id)}
-                        onClick={() => handleLinkClick(link)}
-                        className="relative group/tile flex flex-col items-center p-2 rounded-xl hover:bg-slate-800/50 transition-all cursor-pointer border border-transparent hover:border-slate-700/60 text-center"
-                      >
-                        {/* Hover Quick Action Buttons */}
-                        <div className="absolute -top-1.5 -right-1.5 hidden group-hover/tile:flex items-center gap-0.5 z-20 bg-slate-900 border border-slate-700 rounded-md p-0.5 shadow-lg">
-                          <button
-                            onClick={(e) => handleTogglePin(e, link.id)}
-                            title={link.pinned ? 'Unpin' : 'Pin'}
-                            className="p-1 hover:text-amber-400 text-slate-400"
-                          >
-                            <Star
-                              className={`w-3 h-3 ${link.pinned ? 'text-amber-400 fill-amber-400' : ''}`}
-                            />
-                          </button>
-                          <button
-                            onClick={(e) => handleOpenEditLink(e, link)}
-                            title="Edit"
-                            className="p-1 hover:text-blue-400 text-slate-400"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={(e) => handleDeleteLink(e, link.id)}
-                            title="Delete"
-                            className="p-1 hover:text-rose-400 text-slate-400"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-
-                        {/* Favicon / Tile Logo Box */}
-                        <div
-                          className="w-12 h-12 rounded-xl flex items-center justify-center text-white text-xs font-bold shadow-md ring-1 ring-white/10 transition-transform group-hover/tile:scale-105 overflow-hidden"
-                          style={{ backgroundColor: link.iconBg || '#1e293b' }}
-                        >
-                          {link.favicon ? (
-                            <img
-                              src={link.favicon}
-                              alt={link.title}
-                              className="w-7 h-7 object-contain rounded"
-                              onError={(e) => {
-                                (e.target as HTMLElement).style.display = 'none';
-                              }}
-                            />
-                          ) : (
-                            <span className="tracking-tight">{link.iconLetter || link.title.slice(0, 2).toUpperCase()}</span>
-                          )}
-                        </div>
-
-                        {/* Website Name */}
-                        <span className="mt-2 text-xs font-medium text-slate-300 group-hover/tile:text-purple-300 truncate w-full">
-                          {link.title}
-                        </span>
-
-                        {/* Pinned Indicator */}
-                        {link.pinned && (
-                          <div className="absolute top-1 left-1 text-[9px] text-amber-400 group-hover/tile:hidden">
-                            ★
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              {/* Add Link Footer inside Card */}
-              <div className="pt-3 border-t border-slate-800/60 mt-3 flex items-center justify-between text-xs text-slate-500">
-                <span className="text-[11px]">Drag to organize</span>
-                <button
-                  onClick={() => handleOpenAddLink(category.id)}
-                  className="text-purple-400 hover:text-purple-300 hover:underline flex items-center gap-1 text-[11px] font-medium"
-                >
-                  <Plus className="w-3 h-3" /> Add Link
-                </button>
-              </div>
+                return (
+                  <CategoryCard
+                    key={category.id}
+                    category={category}
+                    links={categoryLinks}
+                    isHighlighted={isHighlighted}
+                    onOpenCategory={(catId) => setSelectedCategoryFilter(catId)}
+                    onAddLink={handleOpenAddLink}
+                    onEditCategory={(cat) => {
+                      setCategoryToEdit(cat);
+                      setIsAddCategoryOpen(true);
+                    }}
+                    onDeleteCategory={handleRequestDeleteCategory}
+                    onOpenLink={handleLinkClick}
+                    onTogglePinLink={handleTogglePin}
+                    onCopyLinkUrl={handleCopyUrl}
+                    onEditLink={handleOpenEditLink}
+                    onDeleteLink={handleRequestDeleteLink}
+                    copiedLinkId={copiedLinkId}
+                  />
+                );
+              })}
             </div>
-          );
-        })}
+          </SortableContext>
+
+          {/* Drag Overlay for both Categories and Links */}
+          <DragOverlay dropAnimation={null}>
+            {activeDragType === 'category' && activeCategory ? (
+              <div className="w-80">
+                <CategoryCard
+                  category={activeCategory}
+                  links={links
+                    .filter((l) => l.categoryId === activeCategory.id)
+                    .sort((a, b) => (a.order || 0) - (b.order || 0))}
+                  onOpenCategory={() => {}}
+                  onAddLink={() => {}}
+                  onEditCategory={() => {}}
+                  onDeleteCategory={() => {}}
+                  onOpenLink={() => {}}
+                  onTogglePinLink={() => {}}
+                  onCopyLinkUrl={() => {}}
+                  onEditLink={() => {}}
+                  onDeleteLink={() => {}}
+                  copiedLinkId={null}
+                  isOverlay={true}
+                />
+              </div>
+            ) : activeDragType === 'link' && activeLink ? (
+              <div className="w-20">
+                <LinkTile
+                  link={activeLink}
+                  onOpen={() => {}}
+                  onTogglePin={() => {}}
+                  onCopyUrl={() => {}}
+                  onEdit={() => {}}
+                  onDelete={() => {}}
+                  isOverlay={true}
+                  isCompact={true}
+                />
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      )}
       </div>
 
-      {/* Modals */}
+      {/* Add / Edit Link Modal */}
       <AddEditLinkModal
         isOpen={isAddLinkOpen}
         onClose={() => setIsAddLinkOpen(false)}
@@ -367,11 +506,84 @@ export const LinksView: React.FC = () => {
         defaultCategoryId={targetCategoryId}
       />
 
+      {/* Add / Edit Category Modal */}
       <AddEditCategoryModal
         isOpen={isAddCategoryOpen}
         onClose={() => setIsAddCategoryOpen(false)}
         categoryToEdit={categoryToEdit}
       />
+
+      {/* React Confirmation Modal for Deleting Link */}
+      <ConfirmModal
+        isOpen={isDeleteLinkModalOpen}
+        onClose={() => {
+          if (!isDeletingLink) {
+            setIsDeleteLinkModalOpen(false);
+            setLinkToDelete(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteLink}
+        title="Delete Bookmark"
+        message="Are you sure you want to delete this bookmark? It will be permanently removed from your dashboard."
+        confirmLabel="Delete Bookmark"
+        variant="danger"
+        isLoading={isDeletingLink}
+        itemDetails={
+          linkToDelete
+            ? {
+                title: linkToDelete.title,
+                subtitle: linkToDelete.url,
+                icon: (
+                  <div
+                    className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold shrink-0"
+                    style={{ backgroundColor: linkToDelete.iconBg || '#1e293b' }}
+                  >
+                    {linkToDelete.iconLetter || linkToDelete.title.slice(0, 2).toUpperCase()}
+                  </div>
+                ),
+              }
+            : undefined
+        }
+      />
+
+      {/* React Confirmation Modal for Deleting Category */}
+      <ConfirmModal
+        isOpen={isDeleteCategoryModalOpen}
+        onClose={() => {
+          if (!isDeletingCategory) {
+            setIsDeleteCategoryModalOpen(false);
+            setCategoryToDelete(null);
+          }
+        }}
+        onConfirm={handleConfirmDeleteCategory}
+        title={`Delete Category "${categoryToDelete?.name || ''}"`}
+        message={`You are about to delete the category "${categoryToDelete?.name || ''}". Choose what to do with the links currently in this category:`}
+        confirmLabel="Confirm Delete"
+        variant="danger"
+        isLoading={isDeletingCategory}
+      >
+        {categoryToDelete && (
+          <div className="space-y-3 pt-2">
+            <label className="block text-xs font-medium theme-text-secondary">
+              Select destination for existing links:
+            </label>
+            <select
+              value={migrateCategoryId}
+              onChange={(e) => setMigrateCategoryId(e.target.value)}
+              className="w-full px-3 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-xs theme-text-primary focus:outline-none focus:border-[#F5B942] cursor-pointer"
+            >
+              {categories
+                .filter((c) => c.id !== categoryToDelete.id)
+                .map((c) => (
+                  <option key={c.id} value={c.id}>
+                    Move links to "{c.name}"
+                  </option>
+                ))}
+              <option value="delete_all">Delete all links inside this category</option>
+            </select>
+          </div>
+        )}
+      </ConfirmModal>
     </div>
   );
 };

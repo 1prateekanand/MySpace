@@ -22,6 +22,8 @@ import {
   INITIAL_NOTIFICATIONS
 } from '../mock/initialData';
 
+import { safeStorage } from '../lib/storage';
+
 // Local storage backup keys
 const KEYS = {
   USER: 'myspace_user',
@@ -37,7 +39,7 @@ const KEYS = {
 
 function readLocal<T>(key: string, fallback: T): T {
   try {
-    const val = localStorage.getItem(key);
+    const val = safeStorage.getItem(key);
     return val ? JSON.parse(val) : fallback;
   } catch {
     return fallback;
@@ -46,7 +48,7 @@ function readLocal<T>(key: string, fallback: T): T {
 
 function writeLocal<T>(key: string, data: T): void {
   try {
-    localStorage.setItem(key, JSON.stringify(data));
+    safeStorage.setItem(key, JSON.stringify(data));
   } catch (err) {
     console.error('Storage write error:', err);
   }
@@ -119,28 +121,45 @@ export const dbService = {
           .select('*')
           .order('order_index', { ascending: true });
 
-        if (!error && data && data.length > 0) {
-          return data.map((c) => ({
+        if (!error && Array.isArray(data)) {
+          const loaded = data.map((c) => ({
             id: c.id,
             name: c.name,
             icon: c.icon,
             color: c.color,
-            order: c.order_index,
-          }));
+            order: c.order_index !== undefined ? c.order_index : 0,
+          })).sort((a, b) => a.order - b.order);
+          // Sync to local cache so offline mode has latest data
+          writeLocal(KEYS.CATEGORIES, loaded);
+          return loaded;
         }
       } catch (err) {
         console.warn('Supabase categories fetch error:', err);
       }
     }
-    return readLocal<LinkCategory[]>(KEYS.CATEGORIES, INITIAL_CATEGORIES);
+    const local = readLocal<LinkCategory[]>(KEYS.CATEGORIES, INITIAL_CATEGORIES);
+    return [...local].sort((a, b) => a.order - b.order);
   },
 
   async saveCategory(category: LinkCategory): Promise<void> {
+    // 1. Always persist to local storage first
+    const currentCats = readLocal<LinkCategory[]>(KEYS.CATEGORIES, INITIAL_CATEGORIES);
+    const existingIdx = currentCats.findIndex((c) => c.id === category.id);
+    let updatedCats: LinkCategory[];
+    if (existingIdx >= 0) {
+      updatedCats = [...currentCats];
+      updatedCats[existingIdx] = category;
+    } else {
+      updatedCats = [...currentCats, category];
+    }
+    writeLocal(KEYS.CATEGORIES, updatedCats);
+
+    // 2. Synchronize to Supabase if connected
     const client = getSupabase();
     if (client) {
       try {
         const { data: { user } } = await client.auth.getUser();
-        await client.from('link_categories').upsert({
+        const { error } = await client.from('link_categories').upsert({
           id: category.id,
           user_id: user?.id || null,
           name: category.name,
@@ -148,19 +167,75 @@ export const dbService = {
           color: category.color,
           order_index: category.order,
         });
+        if (error) {
+          console.error('Supabase save category error:', error);
+          throw new Error(error.message);
+        }
       } catch (err) {
         console.warn('Supabase save category error:', err);
+        throw err;
       }
     }
   },
 
-  async deleteCategory(categoryId: string): Promise<void> {
+  async saveAllCategories(categories: LinkCategory[]): Promise<void> {
+    const ordered = categories.map((c, idx) => ({ ...c, order: idx + 1 }));
+    writeLocal(KEYS.CATEGORIES, ordered);
+
     const client = getSupabase();
     if (client) {
       try {
-        await client.from('link_categories').delete().eq('id', categoryId);
+        const { data: { user } } = await client.auth.getUser();
+        const payload = ordered.map((c) => ({
+          id: c.id,
+          user_id: user?.id || null,
+          name: c.name,
+          icon: c.icon,
+          color: c.color,
+          order_index: c.order,
+        }));
+        await client.from('link_categories').upsert(payload);
+      } catch (err) {
+        console.warn('Supabase saveAllCategories error:', err);
+      }
+    }
+  },
+
+  async deleteCategory(categoryId: string, moveLinksToCategoryId?: string): Promise<void> {
+    // 1. Always update local storage
+    const currentCats = readLocal<LinkCategory[]>(KEYS.CATEGORIES, INITIAL_CATEGORIES);
+    const updatedCats = currentCats.filter((c) => c.id !== categoryId);
+    writeLocal(KEYS.CATEGORIES, updatedCats);
+
+    const currentLinks = readLocal<BookmarkLink[]>(KEYS.LINKS, INITIAL_LINKS);
+    let updatedLinks: BookmarkLink[];
+    if (moveLinksToCategoryId) {
+      updatedLinks = currentLinks.map((l) =>
+        l.categoryId === categoryId ? { ...l, categoryId: moveLinksToCategoryId } : l
+      );
+    } else {
+      updatedLinks = currentLinks.filter((l) => l.categoryId !== categoryId);
+    }
+    writeLocal(KEYS.LINKS, updatedLinks);
+
+    // 2. Synchronize with Supabase
+    const client = getSupabase();
+    if (client) {
+      try {
+        if (moveLinksToCategoryId) {
+          await client
+            .from('saved_links')
+            .update({ category_id: moveLinksToCategoryId })
+            .eq('category_id', categoryId);
+        }
+        const { error } = await client.from('link_categories').delete().eq('id', categoryId);
+        if (error) {
+          console.error('Supabase delete category error:', error);
+          throw new Error(error.message);
+        }
       } catch (err) {
         console.warn('Supabase delete category error:', err);
+        throw err;
       }
     }
   },
@@ -175,8 +250,8 @@ export const dbService = {
           .select('*')
           .order('created_at', { ascending: false });
 
-        if (!error && data && data.length > 0) {
-          return data.map((l) => ({
+        if (!error && Array.isArray(data)) {
+          const loaded = data.map((l) => ({
             id: l.id,
             categoryId: l.category_id,
             title: l.title,
@@ -186,9 +261,12 @@ export const dbService = {
             iconBg: l.icon_bg,
             pinned: l.pinned,
             notes: l.notes,
+            order: l.order_index !== undefined ? l.order_index : (l.order !== undefined ? l.order : 0),
             clickCount: l.click_count || 0,
             createdAt: l.created_at,
           }));
+          writeLocal(KEYS.LINKS, loaded);
+          return loaded;
         }
       } catch (err) {
         console.warn('Supabase links fetch error:', err);
@@ -198,11 +276,24 @@ export const dbService = {
   },
 
   async saveLink(link: BookmarkLink): Promise<void> {
+    // 1. Always update local storage
+    const currentLinks = readLocal<BookmarkLink[]>(KEYS.LINKS, INITIAL_LINKS);
+    const existingIdx = currentLinks.findIndex((l) => l.id === link.id);
+    let updatedLinks: BookmarkLink[];
+    if (existingIdx >= 0) {
+      updatedLinks = [...currentLinks];
+      updatedLinks[existingIdx] = link;
+    } else {
+      updatedLinks = [link, ...currentLinks];
+    }
+    writeLocal(KEYS.LINKS, updatedLinks);
+
+    // 2. Synchronize to Supabase if connected
     const client = getSupabase();
     if (client) {
       try {
         const { data: { user } } = await client.auth.getUser();
-        await client.from('saved_links').upsert({
+        const payload: any = {
           id: link.id,
           category_id: link.categoryId,
           user_id: user?.id || null,
@@ -213,22 +304,78 @@ export const dbService = {
           icon_bg: link.iconBg,
           pinned: link.pinned,
           notes: link.notes,
+          order_index: link.order || 0,
           click_count: link.clickCount,
           created_at: link.createdAt,
-        });
+        };
+        const { error } = await client.from('saved_links').upsert(payload);
+        if (error) {
+          if (error.message && error.message.includes('order_index')) {
+            const { order_index, ...fallbackPayload } = payload;
+            await client.from('saved_links').upsert(fallbackPayload);
+          } else {
+            console.error('Supabase save link error:', error);
+            throw new Error(error.message);
+          }
+        }
       } catch (err) {
         console.warn('Supabase save link error:', err);
+        throw err;
+      }
+    }
+  },
+
+  async saveAllLinks(links: BookmarkLink[]): Promise<void> {
+    writeLocal(KEYS.LINKS, links);
+
+    const client = getSupabase();
+    if (client) {
+      try {
+        const { data: { user } } = await client.auth.getUser();
+        const payload = links.map((link, idx) => ({
+          id: link.id,
+          category_id: link.categoryId,
+          user_id: user?.id || null,
+          title: link.title,
+          url: link.url,
+          favicon: link.favicon,
+          icon_letter: link.iconLetter,
+          icon_bg: link.iconBg,
+          pinned: link.pinned,
+          notes: link.notes,
+          order_index: link.order !== undefined ? link.order : idx + 1,
+          click_count: link.clickCount,
+          created_at: link.createdAt,
+        }));
+        const { error } = await client.from('saved_links').upsert(payload);
+        if (error && error.message && error.message.includes('order_index')) {
+          const fallbackPayload = payload.map(({ order_index, ...rest }) => rest);
+          await client.from('saved_links').upsert(fallbackPayload);
+        }
+      } catch (err) {
+        console.warn('Supabase saveAllLinks error:', err);
       }
     }
   },
 
   async deleteLink(linkId: string): Promise<void> {
+    // 1. Always update local storage
+    const currentLinks = readLocal<BookmarkLink[]>(KEYS.LINKS, INITIAL_LINKS);
+    const updatedLinks = currentLinks.filter((l) => l.id !== linkId);
+    writeLocal(KEYS.LINKS, updatedLinks);
+
+    // 2. Synchronize to Supabase if connected
     const client = getSupabase();
     if (client) {
       try {
-        await client.from('saved_links').delete().eq('id', linkId);
+        const { error } = await client.from('saved_links').delete().eq('id', linkId);
+        if (error) {
+          console.error('Supabase delete link error:', error);
+          throw new Error(error.message);
+        }
       } catch (err) {
         console.warn('Supabase delete link error:', err);
+        throw err;
       }
     }
   },
@@ -305,6 +452,7 @@ export const dbService = {
             dashboardId: t.dashboard_id,
             title: t.title,
             description: t.description,
+            notes: t.notes !== undefined ? t.notes : '',
             status: t.status as TaskStatus,
             priority: t.priority as TaskPriority,
             categoryTag: t.category_tag,
@@ -347,16 +495,30 @@ export const dbService = {
   },
 
   async saveTask(task: TaskItem): Promise<void> {
+    // 1. Always update local storage
+    const currentTasks = readLocal<TaskItem[]>(KEYS.TASKS, INITIAL_TASKS);
+    const existingIdx = currentTasks.findIndex((t) => t.id === task.id);
+    let updatedTasks: TaskItem[];
+    if (existingIdx >= 0) {
+      updatedTasks = [...currentTasks];
+      updatedTasks[existingIdx] = task;
+    } else {
+      updatedTasks = [task, ...currentTasks];
+    }
+    writeLocal(KEYS.TASKS, updatedTasks);
+
+    // 2. Synchronize to Supabase if connected
     const client = getSupabase();
     if (client) {
       try {
         const { data: { user } } = await client.auth.getUser();
-        await client.from('tasks').upsert({
+        const payload: any = {
           id: task.id,
           dashboard_id: task.dashboardId,
           user_id: user?.id || null,
           title: task.title,
           description: task.description,
+          notes: task.notes || null,
           status: task.status,
           priority: task.priority,
           category_tag: task.categoryTag,
@@ -368,7 +530,19 @@ export const dbService = {
           progress: task.progress,
           order_index: task.order,
           updated_at: new Date().toISOString(),
-        });
+        };
+
+        const { error } = await client.from('tasks').upsert(payload);
+        if (error) {
+          // If notes column does not exist on remote schema, safely fallback without notes
+          if (error.message && error.message.includes('notes')) {
+            console.warn('tasks table missing notes column, falling back without notes for remote:', error.message);
+            const { notes, ...fallbackPayload } = payload;
+            await client.from('tasks').upsert(fallbackPayload);
+          } else {
+            console.warn('Supabase save task error:', error);
+          }
+        }
       } catch (err) {
         console.warn('Supabase save task error:', err);
       }
@@ -462,6 +636,8 @@ export const dbService = {
             extension: f.extension,
             contentDataUrl: f.content_data_url,
             textContent: f.text_content,
+            storagePath: f.storage_path,
+            googleDocUrl: f.google_doc_url,
             updatedAt: f.updated_at || 'Recently',
             createdAt: f.created_at,
           }));
@@ -473,12 +649,29 @@ export const dbService = {
     return readLocal<VaultFile[]>(KEYS.FILES, INITIAL_FILES);
   },
 
+  async getFileBlob(file: VaultFile): Promise<Blob | null> {
+    const client = getSupabase();
+    if (client && file.storagePath) {
+      try {
+        const { data, error } = await client.storage
+          .from('vault-files')
+          .download(file.storagePath);
+        if (!error && data) {
+          return data;
+        }
+      } catch (err) {
+        console.warn('Supabase storage download error:', err);
+      }
+    }
+    return null;
+  },
+
   async saveFile(file: VaultFile, rawFile?: File): Promise<void> {
     const client = getSupabase();
     if (client) {
       try {
         const { data: { user } } = await client.auth.getUser();
-        let storagePath = file.id;
+        let storagePath = file.storagePath || file.id;
 
         // If a real raw file is provided, upload to Supabase Storage bucket 'vault-files'
         if (rawFile) {
@@ -504,6 +697,7 @@ export const dbService = {
           storage_path: storagePath,
           content_data_url: file.contentDataUrl,
           text_content: file.textContent,
+          google_doc_url: file.googleDocUrl,
           updated_at: new Date().toISOString(),
         });
       } catch (err) {

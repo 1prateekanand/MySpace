@@ -1,9 +1,75 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
+:root,
+[data-theme="light"],
+html:not(.dark) {
+  --bg-main: #FFFFFF;
+  --bg-sidebar: #FAFAFA;
+  --bg-content: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-card-hover: #FDFBF7;
+  --bg-card-secondary: #F7F7F7;
+  --bg-card-inner: #FAFAFA;
+  --bg-gold-soft: #FFF3D6;
+  --bg-gold-subtle: #FFF9ED;
+  --accent-gold: #E9A817;
+  --accent-gold-hover: #D7980E;
+  --accent-gold-champagne: #F5C85B;
+  --accent-gold-glow: rgba(233, 168, 23, 0.18);
+  --text-primary: #171717;
+  --text-secondary: #666666;
+  --text-muted: #888888;
+  --text-gold: #B87C06;
+  --border-main: #E5E5E5;
+  --border-card: #EAEAEA;
+  --border-gold: rgba(233, 168, 23, 0.4);
+  --divider: #EEEEEE;
+  --scrollbar-thumb: rgba(0, 0, 0, 0.15);
+  --scrollbar-hover: rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"],
+html.dark {
+  --bg-main: #080808;
+  --bg-sidebar: #0B0B0B;
+  --bg-content: #0A0A0A;
+  --bg-card: #14120E;
+  --bg-card-hover: #1A1711;
+  --bg-card-secondary: #1A1711;
+  --bg-card-inner: #0D0B08;
+  --bg-gold-soft: rgba(245, 185, 66, 0.12);
+  --bg-gold-subtle: rgba(245, 185, 66, 0.06);
+  --accent-gold: #F5B942;
+  --accent-gold-hover: #E2A732;
+  --accent-gold-champagne: #D6AD60;
+  --accent-gold-glow: rgba(245, 185, 66, 0.18);
+  --text-primary: #F5F1E7;
+  --text-secondary: #B8B0A0;
+  --text-muted: #7E7667;
+  --text-gold: #F5B942;
+  --border-main: #241D12;
+  --border-card: #3A2D19;
+  --border-gold: rgba(245, 185, 66, 0.4);
+  --divider: #302619;
+  --scrollbar-thumb: rgba(245, 185, 66, 0.2);
+  --scrollbar-hover: rgba(245, 185, 66, 0.4);
+}
+
+html,
+body,
+#root {
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
 @layer base {
   body {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    background-color: var(--bg-main);
+    color: var(--text-primary);
   }
   
   code, pre, .font-mono {
@@ -11,7 +77,7 @@
   }
 }
 
-/* Custom scrollbars for sleek dark aesthetic */
+/* Custom scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -22,10 +88,108 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.2);
+  background: var(--scrollbar-thumb);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.4);
+  background: var(--scrollbar-hover);
+}
+
+/* Utility Theme Classes */
+.theme-bg-main {
+  background-color: var(--bg-main);
+}
+.theme-bg-sidebar {
+  background-color: var(--bg-sidebar);
+}
+.theme-bg-content {
+  background-color: var(--bg-content);
+}
+.theme-bg-card {
+  background-color: var(--bg-card);
+}
+.theme-bg-card-hover:hover {
+  background-color: var(--bg-card-hover);
+}
+.theme-bg-card-secondary {
+  background-color: var(--bg-card-secondary);
+}
+.theme-bg-card-inner {
+  background-color: var(--bg-card-inner);
+}
+.theme-bg-gold-soft {
+  background-color: var(--bg-gold-soft);
+}
+
+.theme-text-primary {
+  color: var(--text-primary);
+}
+.theme-text-secondary {
+  color: var(--text-secondary);
+}
+.theme-text-muted {
+  color: var(--text-muted);
+}
+.theme-text-gold {
+  color: var(--text-gold);
+}
+
+.theme-border-main {
+  border-color: var(--border-main);
+}
+.theme-border-card {
+  border-color: var(--border-card);
+}
+.theme-border-gold {
+  border-color: var(--border-gold);
+}
+.theme-divider {
+  border-color: var(--divider);
+}
+
+/* Gold Action Button */
+.gold-btn {
+  background-color: var(--accent-gold);
+  color: #120E06;
+  font-weight: 600;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.gold-btn:hover {
+  background-color: var(--accent-gold-hover);
+  box-shadow: 0 4px 14px var(--accent-gold-glow);
+  transform: translateY(-0.5px);
+}
+
+/* Gold Nav Active State */
+html.dark .gold-nav-active {
+  background: linear-gradient(90deg, rgba(245, 185, 66, 0.16) 0%, rgba(214, 173, 96, 0.08) 100%);
+  border: 1px solid #F5B942;
+  box-shadow: 0 0 15px rgba(245, 185, 66, 0.18);
+  color: #F5B942;
+}
+
+html:not(.dark) .gold-nav-active,
+[data-theme="light"] .gold-nav-active {
+  background-color: #FFF3D6;
+  border: 1px solid #F5C85B;
+  box-shadow: 0 1px 4px rgba(233, 168, 23, 0.12);
+  color: #171717;
+}
+
+/* Gold Pill Active State */
+html.dark .gold-pill-active {
+  background-color: #F5B942;
+  color: #0A0A0A;
+  font-weight: 600;
+  box-shadow: 0 2px 10px rgba(245, 185, 66, 0.25);
+  border: 1px solid #F5B942;
+}
+
+html:not(.dark) .gold-pill-active,
+[data-theme="light"] .gold-pill-active {
+  background-color: #FFF3D6;
+  color: #171717;
+  font-weight: 600;
+  border: 1px solid #E9A817;
 }

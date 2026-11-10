@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   DndContext,
   DragOverlay,
+  pointerWithin,
   closestCorners,
   PointerSensor,
   useSensor,
@@ -24,7 +25,8 @@ import {
   Plus,
   GripVertical,
   Calendar,
-  Pause
+  Pause,
+  AlertCircle
 } from 'lucide-react';
 import { useMySpace } from '../../context/MySpaceContext';
 import { TaskItem, TaskStatus } from '../../types';
@@ -37,104 +39,86 @@ interface KanbanBoardProps {
 const getPriorityStyle = (priority: TaskItem['priority']) => {
   switch (priority) {
     case 'high':
-      return 'bg-rose-950/80 text-rose-300 border-rose-500/40';
+      return 'bg-rose-500/15 text-rose-400 border-rose-500/30';
     case 'medium':
-      return 'bg-amber-950/80 text-amber-300 border-amber-500/40';
+      return 'bg-[#F5B942]/15 text-[#D99A1C] dark:text-[#F5B942] border-[#F5B942]/30';
     case 'low':
-      return 'bg-emerald-950/80 text-emerald-300 border-emerald-500/40';
+      return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30';
   }
 };
 
-const getCategoryTagStyle = (tag?: string) => {
-  switch (tag?.toLowerCase()) {
-    case 'trading':
-      return 'bg-indigo-950/80 text-indigo-300 border-indigo-500/40';
-    case 'backend':
-      return 'bg-blue-950/80 text-blue-300 border-blue-500/40';
-    case 'frontend':
-      return 'bg-cyan-950/80 text-cyan-300 border-cyan-500/40';
-    case 'devops':
-      return 'bg-sky-950/80 text-sky-300 border-sky-500/40';
-    case 'ai/ml':
-      return 'bg-purple-950/80 text-purple-300 border-purple-500/40';
-    case 'data':
-      return 'bg-fuchsia-950/80 text-fuchsia-300 border-fuchsia-500/40';
-    default:
-      return 'bg-slate-800 text-slate-300 border-slate-700';
-  }
+const getCategoryTagStyle = () => {
+  return 'theme-bg-card-inner theme-text-secondary border theme-border-card';
 };
 
-// Sortable Task Card Component
-interface SortableTaskCardProps {
+// Pure Task Card View for standard display & drag overlay
+interface TaskCardViewProps {
   task: TaskItem;
-  onSelectTask: (task: TaskItem) => void;
+  onSelectTask?: (task: TaskItem) => void;
   isOverlay?: boolean;
+  isDragging?: boolean;
+  dragHandleProps?: Record<string, any>;
 }
 
-const SortableTaskCard: React.FC<SortableTaskCardProps> = ({
+const TaskCardView: React.FC<TaskCardViewProps> = ({
   task,
   onSelectTask,
   isOverlay = false,
+  isDragging = false,
+  dragHandleProps = {},
 }) => {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: task.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-  };
-
   return (
     <div
-      ref={setNodeRef}
-      style={style}
-      onClick={() => onSelectTask(task)}
-      className={`group bg-[#161c2e] hover:bg-[#1a233a] border rounded-xl p-3.5 shadow-md transition-all cursor-pointer relative select-none ${
+      onClick={() => onSelectTask && onSelectTask(task)}
+      className={`group theme-bg-card-secondary hover:theme-bg-card-inner border rounded-xl p-3.5 shadow-xs transition-all cursor-pointer relative select-none ${
         isOverlay
-          ? 'border-purple-400 ring-2 ring-purple-500/50 shadow-2xl shadow-purple-900/50 scale-105 rotate-1 bg-[#1c2238] z-50'
+          ? 'border-[#F5B942] ring-2 ring-[#F5B942]/60 shadow-2xl scale-102 rotate-1 theme-bg-card z-50 cursor-grabbing'
           : isDragging
-          ? 'opacity-30 border-purple-500/40'
-          : 'border-slate-800/90 hover:border-purple-500/50 hover:shadow-purple-900/20'
+          ? 'opacity-25 border-dashed border-[#F5B942]/70'
+          : 'theme-border-card hover:border-[#F5B942]/60 hover:shadow-md'
       }`}
     >
       {/* Top Row: Title & Drag Handle */}
-      <div className="flex items-start justify-between gap-2 mb-3">
-        <div className="flex items-center gap-2">
-          {task.status === 'done' && (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          )}
-          <h4 className="text-xs font-bold text-slate-100 group-hover:text-purple-300 leading-snug">
+      <div className="flex items-start justify-between gap-2 mb-2.5">
+        <div className="flex items-start gap-2">
+          {task.status === 'done' ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+          ) : task.priority === 'high' ? (
+            <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />
+          ) : null}
+          <h4 className="text-xs font-bold theme-text-primary group-hover:text-[#F5B942] leading-snug">
             {task.title}
           </h4>
         </div>
         <button
-          {...attributes}
-          {...listeners}
+          {...dragHandleProps}
           onClick={(e) => e.stopPropagation()}
-          className="text-slate-500 group-hover:text-slate-300 cursor-grab active:cursor-grabbing p-0.5 rounded shrink-0 focus:outline-none"
+          className="theme-text-muted hover:text-[#F5B942] cursor-grab active:cursor-grabbing p-1 rounded-md hover:theme-bg-card-hover shrink-0 focus:outline-none transition-colors"
+          title="Drag to move"
         >
           <GripVertical className="w-3.5 h-3.5" />
         </button>
       </div>
 
-      {/* Subtasks mini progress if any */}
-      {task.subtasks.length > 0 && (
+      {/* Optional short description snippet */}
+      {task.description && (
+        <p className="text-[11px] theme-text-muted line-clamp-2 mb-2.5 leading-relaxed">
+          {task.description}
+        </p>
+      )}
+
+      {/* Subtasks mini checklist progress if any */}
+      {task.subtasks && task.subtasks.length > 0 && (
         <div className="mb-2.5">
-          <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
+          <div className="flex items-center justify-between text-[10px] theme-text-muted mb-1">
             <span>Checklist</span>
             <span className="font-mono">
               {task.subtasks.filter((s) => s.completed).length}/{task.subtasks.length}
             </span>
           </div>
-          <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">
+          <div className="w-full theme-bg-card h-1 rounded-full overflow-hidden">
             <div
-              className="bg-purple-500 h-full rounded-full transition-all"
+              className="bg-[#F5B942] h-full rounded-full transition-all"
               style={{ width: `${task.progress}%` }}
             />
           </div>
@@ -142,7 +126,7 @@ const SortableTaskCard: React.FC<SortableTaskCardProps> = ({
       )}
 
       {/* Bottom Row: Tags & Due Date */}
-      <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-800/60 text-[11px]">
+      <div className="flex items-center justify-between gap-2 pt-2 theme-divider border-t text-[11px]">
         <div className="flex items-center gap-1.5 flex-wrap">
           <span
             className={`px-2 py-0.5 rounded-full font-semibold capitalize border ${getPriorityStyle(
@@ -152,43 +136,91 @@ const SortableTaskCard: React.FC<SortableTaskCardProps> = ({
             {task.priority}
           </span>
 
-          {task.categoryTag && (
+          {task.projectCode && (
+            <span className="px-1.5 py-0.5 rounded font-mono text-[10px] font-semibold bg-[#F5B942]/10 border border-[#F5B942]/30 text-[#D99A1C] dark:text-[#F5B942]">
+              {task.projectCode}
+            </span>
+          )}
+
+          {task.categoryTag && !task.projectCode && (
             <span
-              className={`px-2 py-0.5 rounded-full font-medium border ${getCategoryTagStyle(
-                task.categoryTag
-              )}`}
+              className={`px-2 py-0.5 rounded-full font-medium border ${getCategoryTagStyle()}`}
             >
               {task.categoryTag}
             </span>
           )}
         </div>
 
-        {task.dueDate && (
-          <div className="flex items-center gap-1 text-slate-400 text-[10px] whitespace-nowrap shrink-0">
-            <Calendar className="w-3 h-3 text-slate-500" />
-            <span>{task.dueDate}</span>
-          </div>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {task.dueDate && (
+            <div className="flex items-center gap-1 theme-text-muted text-[10px] whitespace-nowrap">
+              <Calendar className="w-3 h-3 theme-text-muted" />
+              <span>{task.dueDate}</span>
+            </div>
+          )}
 
-        {task.status === 'on_hold' && (
-          <div className="w-5 h-5 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
-            <Pause className="w-2.5 h-2.5 fill-amber-400" />
-          </div>
-        )}
+          {task.status === 'on_hold' && (
+            <div
+              className="w-4 h-4 rounded-full bg-[#F5B942]/15 border border-[#F5B942]/30 flex items-center justify-center text-[#D99A1C] dark:text-[#F5B942]"
+              title="On Hold"
+            >
+              <Pause className="w-2 h-2 fill-current" />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 };
 
-// Droppable Column Component
+// Sortable Task Card Component using useSortable
+interface SortableTaskCardProps {
+  task: TaskItem;
+  onSelectTask: (task: TaskItem) => void;
+}
+
+const SortableTaskCard: React.FC<SortableTaskCardProps> = ({ task, onSelectTask }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: task.id,
+    data: {
+      type: 'task',
+      task,
+    },
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <TaskCardView
+        task={task}
+        onSelectTask={onSelectTask}
+        isDragging={isDragging}
+        dragHandleProps={{ ...attributes, ...listeners }}
+      />
+    </div>
+  );
+};
+
+// Droppable Column Component with Fixed Height & Independent Vertical Scrolling
 interface DroppableColumnProps {
   id: TaskStatus;
   title: string;
   icon: React.ReactNode;
   headerColor: string;
   columnBorderColor: string;
-  columnGlow: string;
   tasks: TaskItem[];
+  isHighlighted: boolean;
   onSelectTask: (task: TaskItem) => void;
   onOpenAddTask: (status: TaskStatus) => void;
 }
@@ -199,62 +231,73 @@ const DroppableColumn: React.FC<DroppableColumnProps> = ({
   icon,
   headerColor,
   columnBorderColor,
-  columnGlow,
   tasks,
+  isHighlighted,
   onSelectTask,
   onOpenAddTask,
 }) => {
-  const { setNodeRef, isOver } = useDroppable({ id });
+  const { setNodeRef } = useDroppable({
+    id,
+    data: {
+      type: 'column',
+      status: id,
+    },
+  });
 
   return (
     <div
       ref={setNodeRef}
-      className={`bg-[#131929] border rounded-2xl p-4 flex flex-col min-h-[460px] transition-all duration-150 ${columnBorderColor} ${columnGlow} ${
-        isOver ? 'ring-2 ring-purple-500 bg-purple-950/20 scale-[1.01]' : ''
+      className={`theme-bg-card border rounded-2xl flex flex-col h-full min-h-0 shadow-sm transition-all duration-150 ${columnBorderColor} ${
+        isHighlighted
+          ? 'ring-2 ring-[#F5B942] bg-[#F5B942]/10 border-[#F5B942] shadow-lg shadow-[#F5B942]/15 scale-[1.01]'
+          : ''
       }`}
     >
-      {/* Column Header */}
-      <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800/80">
+      {/* 1. Column Header (Fixed at top, never scrolls away) */}
+      <div className="shrink-0 p-4 pb-3 theme-divider border-b flex items-center justify-between theme-bg-card-secondary rounded-t-2xl">
         <div className="flex items-center gap-2.5">
           {icon}
           <h3 className={`text-sm font-bold tracking-tight ${headerColor}`}>{title}</h3>
-          <span className="text-xs font-mono font-semibold text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded-full border border-slate-700/60">
+          <span className="text-xs font-mono font-semibold theme-text-primary px-2 py-0.5 rounded-full theme-bg-card border theme-border-card shadow-xs">
             {tasks.length}
           </span>
         </div>
 
         <button
           onClick={() => onOpenAddTask(id)}
-          className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800/60 transition-colors"
-          title="Add task to column"
+          className="p-1 rounded-lg theme-text-muted hover:text-[#F5B942] hover:theme-bg-card transition-colors cursor-pointer"
+          title={`Add task to ${title}`}
         >
           <Plus className="w-4 h-4" />
         </button>
       </div>
 
-      {/* Task Cards Container */}
-      <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-        <div className="flex-1 space-y-3 min-h-[120px]">
+      {/* 2. Scrollable Task Cards Container (Independent Vertical Scrolling) */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
+        <SortableContext items={tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
           {tasks.length === 0 ? (
-            <div className="h-32 border-2 border-dashed border-slate-800/80 rounded-xl flex items-center justify-center text-xs text-slate-500">
-              Drop tasks here
+            <div className="h-full min-h-[140px] border-2 border-dashed theme-border-card rounded-xl flex flex-col items-center justify-center p-4 text-center">
+              <span className="text-xs font-medium theme-text-muted mb-1">No tasks in {title}</span>
+              <span className="text-[11px] theme-text-muted/70">Drag tasks here or click + below</span>
             </div>
           ) : (
             tasks.map((task) => (
               <SortableTaskCard key={task.id} task={task} onSelectTask={onSelectTask} />
             ))
           )}
-        </div>
-      </SortableContext>
+        </SortableContext>
+      </div>
 
-      {/* Bottom Add Task Button */}
-      <button
-        onClick={() => onOpenAddTask(id)}
-        className="mt-3 w-full py-2 px-3 rounded-xl border border-dashed border-slate-800 hover:border-purple-500/50 text-slate-400 hover:text-purple-300 text-xs font-medium flex items-center justify-center gap-1.5 transition-colors bg-slate-900/40 hover:bg-slate-800/40"
-      >
-        <Plus className="w-3.5 h-3.5" />
-        <span>Add Task</span>
-      </button>
+      {/* 3. Column Footer (Fixed at bottom, always accessible) */}
+      <div className="shrink-0 p-3 pt-2.5 theme-divider border-t theme-bg-card-secondary rounded-b-2xl">
+        <button
+          onClick={() => onOpenAddTask(id)}
+          className="w-full py-2 px-3 rounded-xl border border-dashed theme-border-card hover:border-[#F5B942]/70 theme-text-muted hover:text-[#D99A1C] dark:hover:text-[#F5B942] text-xs font-semibold flex items-center justify-center gap-1.5 transition-all theme-bg-card hover:theme-bg-card-hover cursor-pointer shadow-xs"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          <span>Add Task</span>
+        </button>
+      </div>
     </div>
   );
 };
@@ -265,11 +308,12 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
 }) => {
   const { tasks, activeDashboardId, moveTask } = useMySpace();
   const [activeTask, setActiveTask] = useState<TaskItem | null>(null);
+  const [overStatus, setOverStatus] = useState<TaskStatus | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 5,
+        distance: 4,
       },
     })
   );
@@ -282,41 +326,36 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
     icon: React.ReactNode;
     headerColor: string;
     columnBorderColor: string;
-    columnGlow: string;
   }[] = [
     {
       id: 'todo',
       title: 'To Do',
       icon: <Circle className="w-4 h-4 text-slate-400 stroke-[2.2]" />,
-      headerColor: 'text-slate-300',
-      columnBorderColor: 'border-slate-800/90',
-      columnGlow: 'hover:border-slate-700',
+      headerColor: 'theme-text-primary',
+      columnBorderColor: 'theme-border-card',
     },
     {
       id: 'in_progress',
       title: 'In Progress',
       icon: (
-        <div className="w-4 h-4 rounded-full border-2 border-blue-400 border-t-transparent animate-spin duration-1000" />
+        <div className="w-4 h-4 rounded-full border-2 border-[#D99A1C] dark:border-[#F5B942] border-t-transparent animate-spin duration-1000" />
       ),
-      headerColor: 'text-blue-300',
-      columnBorderColor: 'border-blue-900/40 bg-blue-950/10',
-      columnGlow: 'hover:border-blue-600/60 ring-1 ring-blue-500/20',
+      headerColor: 'theme-text-primary',
+      columnBorderColor: 'border-[#F5B942]/35',
     },
     {
       id: 'done',
       title: 'Done',
-      icon: <CheckCircle2 className="w-4 h-4 text-emerald-400 stroke-[2.2]" />,
-      headerColor: 'text-emerald-300',
-      columnBorderColor: 'border-emerald-900/40 bg-emerald-950/10',
-      columnGlow: 'hover:border-emerald-600/60 ring-1 ring-emerald-500/20',
+      icon: <CheckCircle2 className="w-4 h-4 text-emerald-500 stroke-[2.2]" />,
+      headerColor: 'theme-text-primary',
+      columnBorderColor: 'border-emerald-500/30',
     },
     {
       id: 'on_hold',
       title: 'On Hold',
-      icon: <PauseCircle className="w-4 h-4 text-amber-400 stroke-[2.2]" />,
-      headerColor: 'text-amber-300',
-      columnBorderColor: 'border-amber-900/40 bg-amber-950/10',
-      columnGlow: 'hover:border-amber-600/60 ring-1 ring-amber-500/20',
+      icon: <PauseCircle className="w-4 h-4 text-[#D99A1C] dark:text-[#F5B942] stroke-[2.2]" />,
+      headerColor: 'theme-text-primary',
+      columnBorderColor: 'border-[#F5B942]/30',
     },
   ];
 
@@ -325,12 +364,37 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
     const task = currentTasks.find((t) => t.id === active.id);
     if (task) {
       setActiveTask(task);
+      setOverStatus(task.status);
+    }
+  };
+
+  const handleDragOver = (event: DragOverEvent) => {
+    const { over } = event;
+    if (!over) {
+      setOverStatus(null);
+      return;
+    }
+
+    const overId = String(over.id);
+
+    // Direct column hit
+    const isColumn = columns.some((c) => c.id === overId);
+    if (isColumn) {
+      setOverStatus(overId as TaskStatus);
+      return;
+    }
+
+    // Over a task in a column
+    const overTask = currentTasks.find((t) => t.id === overId);
+    if (overTask) {
+      setOverStatus(overTask.status);
     }
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveTask(null);
+    setOverStatus(null);
 
     if (!over) return;
 
@@ -365,15 +429,20 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCorners}
+      collisionDetection={pointerWithin || closestCorners}
       onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
     >
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-start">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-stretch h-full min-h-0">
         {columns.map((column) => {
           const columnTasks = currentTasks
             .filter((t) => t.status === column.id)
             .sort((a, b) => a.order - b.order);
+
+          const isHighlighted = Boolean(
+            activeTask && overStatus === column.id
+          );
 
           return (
             <DroppableColumn
@@ -383,8 +452,8 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
               icon={column.icon}
               headerColor={column.headerColor}
               columnBorderColor={column.columnBorderColor}
-              columnGlow={column.columnGlow}
               tasks={columnTasks}
+              isHighlighted={isHighlighted}
               onSelectTask={onSelectTask}
               onOpenAddTask={onOpenAddTask}
             />
@@ -392,9 +461,11 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
         })}
       </div>
 
-      <DragOverlay>
+      <DragOverlay dropAnimation={null}>
         {activeTask ? (
-          <SortableTaskCard task={activeTask} onSelectTask={() => {}} isOverlay={true} />
+          <div className="w-72">
+            <TaskCardView task={activeTask} isOverlay={true} />
+          </div>
         ) : null}
       </DragOverlay>
     </DndContext>

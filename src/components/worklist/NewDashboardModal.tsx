@@ -33,12 +33,12 @@ export const NewDashboardModal: React.FC<NewDashboardModalProps> = ({ isOpen, on
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
-      <div className="w-full max-w-md bg-[#131929] border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in-50 zoom-in-95">
-        <div className="px-5 py-4 border-b border-slate-700/70 flex items-center justify-between bg-[#161c2e]">
-          <h3 className="text-base font-semibold text-white">Create New Dashboard</h3>
+      <div className="w-full max-w-md theme-bg-card border theme-border-card rounded-2xl shadow-2xl overflow-hidden animate-in fade-in-50 zoom-in-95">
+        <div className="px-5 py-4 theme-divider border-b flex items-center justify-between theme-bg-card-secondary">
+          <h3 className="text-base font-semibold theme-text-primary">Create New Dashboard</h3>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1 rounded-lg theme-text-muted hover:theme-text-primary hover:theme-bg-card-hover transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -46,7 +46,7 @@ export const NewDashboardModal: React.FC<NewDashboardModalProps> = ({ isOpen, on
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">
+            <label className="block text-xs font-semibold theme-text-primary mb-1">
               Dashboard Name *
             </label>
             <input
@@ -55,12 +55,12 @@ export const NewDashboardModal: React.FC<NewDashboardModalProps> = ({ isOpen, on
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Client Projects, Research, Trading Lab"
-              className="w-full px-3 py-2 bg-[#0d121f] border border-slate-700 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-purple-500"
+              className="w-full px-3 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-sm theme-text-primary placeholder:theme-text-muted focus:outline-none focus:border-[#F5B942]"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+            <label className="block text-xs font-semibold theme-text-primary mb-1.5">
               Dashboard Icon
             </label>
             <div className="grid grid-cols-3 gap-2">
@@ -69,10 +69,10 @@ export const NewDashboardModal: React.FC<NewDashboardModalProps> = ({ isOpen, on
                   key={iconKey}
                   type="button"
                   onClick={() => setSelectedIcon(iconKey)}
-                  className={`p-2.5 rounded-xl border flex flex-col items-center gap-1.5 transition-all ${
+                  className={`p-2.5 rounded-xl border flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
                     selectedIcon === iconKey
-                      ? 'bg-purple-600/20 border-purple-500 text-purple-200'
-                      : 'bg-[#0d121f] border-slate-700 text-slate-400 hover:text-slate-200'
+                      ? 'bg-[#F5B942]/15 border-[#F5B942] text-[#D99A1C] dark:text-[#F5B942] ring-1 ring-[#F5B942]/30'
+                      : 'theme-bg-card-inner theme-border-card theme-text-muted hover:theme-text-primary hover:border-[#F5B942]/40'
                   }`}
                 >
                   <IconComp className="w-5 h-5" />
@@ -82,17 +82,17 @@ export const NewDashboardModal: React.FC<NewDashboardModalProps> = ({ isOpen, on
             </div>
           </div>
 
-          <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+          <div className="pt-2 flex items-center justify-end gap-2 theme-divider border-t">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white bg-slate-800/60 hover:bg-slate-800 rounded-xl transition-colors"
+              className="px-4 py-2 text-xs font-medium theme-text-secondary hover:theme-text-primary theme-bg-card-secondary hover:theme-bg-card-hover rounded-xl transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-4 py-2 text-xs font-medium text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 rounded-xl shadow-lg shadow-purple-600/30 transition-all"
+              className="gold-btn px-4 py-2 text-xs font-semibold rounded-xl shadow-md transition-all cursor-pointer"
             >
               Create Dashboard
             </button>

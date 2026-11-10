@@ -27,6 +27,8 @@ import {
 } from '../mock/initialData';
 import { dbService } from '../services/dbService';
 import { getSupabase, isSupabaseConnected, saveStoredSupabaseConfig, getStoredSupabaseConfig } from '../lib/supabase';
+import { safeStorage } from '../lib/storage';
+import { cacheFile } from '../lib/fileOpener';
 
 interface MySpaceContextType {
   // Navigation & Page
@@ -77,13 +79,15 @@ interface MySpaceContextType {
   setSelectedCategoryFilter: (catId: string) => void;
   addCategory: (name: string, icon: string, color: string) => Promise<void>;
   updateCategory: (id: string, name: string, icon: string, color: string) => Promise<void>;
-  deleteCategory: (id: string) => Promise<void>;
+  deleteCategory: (id: string, moveLinksToCategoryId?: string) => Promise<boolean>;
   addLink: (link: Omit<BookmarkLink, 'id' | 'clickCount' | 'createdAt'>) => Promise<{ success: boolean; error?: string }>;
-  updateLink: (id: string, updates: Partial<BookmarkLink>) => Promise<void>;
-  deleteLink: (id: string) => Promise<void>;
+  updateLink: (id: string, updates: Partial<BookmarkLink>) => Promise<boolean>;
+  deleteLink: (id: string) => Promise<boolean>;
   togglePinLink: (id: string) => Promise<void>;
   trackLinkClick: (id: string) => Promise<void>;
   reorderLinks: (categoryId: string, reorderedLinks: BookmarkLink[]) => Promise<void>;
+  reorderCategories: (reorderedCategories: LinkCategory[]) => Promise<void>;
+  moveLink: (linkId: string, targetCategoryId: string, targetIndex?: number) => Promise<void>;
 
   // Work List & Tasks
   dashboards: WorkDashboard[];
@@ -128,6 +132,7 @@ interface MySpaceContextType {
   deleteFolder: (id: string) => Promise<void>;
   uploadFile: (file: File, folderId?: string | null) => Promise<void>;
   createNoteFile: (name: string, content: string, folderId?: string | null) => Promise<void>;
+  addVaultFile: (file: VaultFile) => Promise<void>;
   renameFile: (id: string, newName: string) => Promise<void>;
   deleteFile: (id: string) => Promise<void>;
   deleteSelectedFiles: () => Promise<void>;
@@ -145,7 +150,11 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
   // Navigation & Page
   const [currentPage, setCurrentPage] = useState<NavPage>(() => {
     try {
-      return (localStorage.getItem('myspace_current_page') as NavPage) || 'links';
+      const saved = safeStorage.getItem('myspace_current_page');
+      if (saved === 'links' || saved === 'work-list' || saved === 'vault' || saved === 'settings') {
+        return saved;
+      }
+      return 'links';
     } catch {
       return 'links';
     }
@@ -154,7 +163,11 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
   // Theme
   const [theme, setTheme] = useState<ThemeMode>(() => {
     try {
-      return (localStorage.getItem('myspace_theme') as ThemeMode) || 'dark';
+      const saved = safeStorage.getItem('myspace_theme');
+      if (saved === 'dark' || saved === 'light') {
+        return saved;
+      }
+      return 'dark';
     } catch {
       return 'dark';
     }
@@ -181,18 +194,39 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
   // Links
   const [categories, setCategories] = useState<LinkCategory[]>(INITIAL_CATEGORIES);
   const [links, setLinks] = useState<BookmarkLink[]>(INITIAL_LINKS);
-  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>(() => {
+    try {
+      return safeStorage.getItem('myspace_selected_category') || 'all';
+    } catch {
+      return 'all';
+    }
+  });
 
   // Work List
   const [dashboards, setDashboards] = useState<WorkDashboard[]>(INITIAL_DASHBOARDS);
-  const [activeDashboardId, setActiveDashboardId] = useState<string>('dash-working');
+  const [activeDashboardId, setActiveDashboardId] = useState<string>(() => {
+    try {
+      return safeStorage.getItem('myspace_active_dashboard') || 'dash-working';
+    } catch {
+      return 'dash-working';
+    }
+  });
   const [workListViewMode, setWorkListViewMode] = useState<WorkListViewMode>('board');
   const [tasks, setTasks] = useState<TaskItem[]>(INITIAL_TASKS);
 
   // Vault
   const [folders, setFolders] = useState<VaultFolder[]>(INITIAL_FOLDERS);
   const [files, setFiles] = useState<VaultFile[]>(INITIAL_FILES);
-  const [currentFolderId, setCurrentFolderId] = useState<string | null>('f-projects');
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(() => {
+    try {
+      const saved = safeStorage.getItem('myspace_current_folder');
+      if (saved === 'null') return null;
+      if (saved) return saved;
+      return 'f-projects';
+    } catch {
+      return 'f-projects';
+    }
+  });
   const [vaultViewMode, setVaultViewMode] = useState<'grid' | 'list'>('grid');
   const [vaultSortBy, setVaultSortBy] = useState<'name' | 'date' | 'size'>('name');
   const [vaultSearchQuery, setVaultSearchQuery] = useState('');
@@ -211,21 +245,56 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     setToasts(prev => prev.filter(t => t.id !== id));
   };
 
-  // Sync Theme to HTML class
+  // Sync Theme to HTML class & data-theme
   useEffect(() => {
-    const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
+    try {
+      const root = document.documentElement;
+      if (theme === 'dark') {
+        root.classList.add('dark');
+        root.setAttribute('data-theme', 'dark');
+      } else {
+        root.classList.remove('dark');
+        root.setAttribute('data-theme', 'light');
+      }
+      safeStorage.setItem('myspace_theme', theme);
+    } catch {
+      // ignore
     }
-    localStorage.setItem('myspace_theme', theme);
   }, [theme]);
 
   // Persist Page
   useEffect(() => {
-    localStorage.setItem('myspace_current_page', currentPage);
+    try {
+      safeStorage.setItem('myspace_current_page', currentPage);
+    } catch {
+      // ignore
+    }
   }, [currentPage]);
+
+  // Persist Submenu Selections
+  useEffect(() => {
+    try {
+      safeStorage.setItem('myspace_selected_category', selectedCategoryFilter);
+    } catch {
+      // ignore
+    }
+  }, [selectedCategoryFilter]);
+
+  useEffect(() => {
+    try {
+      safeStorage.setItem('myspace_active_dashboard', activeDashboardId);
+    } catch {
+      // ignore
+    }
+  }, [activeDashboardId]);
+
+  useEffect(() => {
+    try {
+      safeStorage.setItem('myspace_current_folder', String(currentFolderId));
+    } catch {
+      // ignore
+    }
+  }, [currentFolderId]);
 
   // Global Keyboard Shortcut (Ctrl+K or Cmd+K)
   useEffect(() => {
@@ -418,15 +487,39 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     showToast(`Category "${name}" updated`);
   };
 
-  const deleteCategory = async (id: string) => {
+  const deleteCategory = async (id: string, moveLinksToCategoryId?: string): Promise<boolean> => {
     const targetCat = categories.find(c => c.id === id);
+    if (!targetCat) return false;
+
+    const originalCategories = [...categories];
+    const originalLinks = [...links];
+
+    // Optimistically update
     setCategories(prev => prev.filter(c => c.id !== id));
-    setLinks(prev => prev.filter(l => l.categoryId !== id));
-    await dbService.deleteCategory(id);
-    if (selectedCategoryFilter === id) {
-      setSelectedCategoryFilter('all');
+    if (moveLinksToCategoryId) {
+      setLinks(prev =>
+        prev.map(l => (l.categoryId === id ? { ...l, categoryId: moveLinksToCategoryId } : l))
+      );
+    } else {
+      setLinks(prev => prev.filter(l => l.categoryId !== id));
     }
-    showToast(`Category "${targetCat?.name || ''}" deleted`, 'info');
+
+    try {
+      await dbService.deleteCategory(id, moveLinksToCategoryId);
+      if (selectedCategoryFilter === id) {
+        setSelectedCategoryFilter('all');
+      }
+      showToast(`Category "${targetCat.name}" deleted`, 'info');
+      addNotification('Category Deleted', `Category "${targetCat.name}" was deleted.`, 'info');
+      return true;
+    } catch (err: any) {
+      // Rollback on failure
+      setCategories(originalCategories);
+      setLinks(originalLinks);
+      showToast(`Failed to delete category: ${err?.message || 'Database error'}`, 'error');
+      console.error('Delete category failed:', err);
+      return false;
+    }
   };
 
   const addLink = async (
@@ -473,31 +566,77 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     };
 
     setLinks(prev => [newLink, ...prev]);
-    await dbService.saveLink(newLink);
-    showToast(`Saved bookmark "${newLink.title}"`);
-    addNotification('Link Added', `"${newLink.title}" was saved to bookmarks.`, 'success');
-    return { success: true };
+    try {
+      await dbService.saveLink(newLink);
+      showToast(`Saved bookmark "${newLink.title}"`);
+      addNotification('Link Added', `"${newLink.title}" was saved to bookmarks.`, 'success');
+      return { success: true };
+    } catch (err: any) {
+      setLinks(prev => prev.filter(l => l.id !== newLink.id));
+      showToast(`Failed to save bookmark: ${err?.message || 'Database error'}`, 'error');
+      return { success: false, error: err?.message };
+    }
   };
 
-  const updateLink = async (id: string, updates: Partial<BookmarkLink>) => {
+  const updateLink = async (id: string, updates: Partial<BookmarkLink>): Promise<boolean> => {
+    if (updates.url) {
+      const isDuplicate = links.some(
+        l => l.id !== id && l.url.toLowerCase() === updates.url!.toLowerCase()
+      );
+      if (isDuplicate) {
+        showToast(`Another bookmark with URL "${updates.url}" already exists!`, 'warning');
+        return false;
+      }
+    }
+
+    const originalLinks = [...links];
+    let updatedLinkObj: BookmarkLink | undefined;
+
     setLinks(prev =>
       prev.map(l => {
         if (l.id === id) {
           const updated = { ...l, ...updates };
-          dbService.saveLink(updated);
+          updatedLinkObj = updated;
           return updated;
         }
         return l;
       })
     );
-    showToast('Bookmark updated');
+
+    if (updatedLinkObj) {
+      try {
+        await dbService.saveLink(updatedLinkObj);
+        showToast('Bookmark updated', 'success');
+        return true;
+      } catch (err: any) {
+        setLinks(originalLinks);
+        showToast(`Failed to update bookmark: ${err?.message || 'Database error'}`, 'error');
+        return false;
+      }
+    }
+    return false;
   };
 
-  const deleteLink = async (id: string) => {
+  const deleteLink = async (id: string): Promise<boolean> => {
+    const originalLinks = [...links];
     const target = links.find(l => l.id === id);
+    if (!target) return false;
+
+    // Optimistically remove from state immediately
     setLinks(prev => prev.filter(l => l.id !== id));
-    await dbService.deleteLink(id);
-    showToast(`Bookmark "${target?.title || ''}" removed`, 'info');
+
+    try {
+      await dbService.deleteLink(id);
+      showToast(`Bookmark "${target.title}" deleted`, 'info');
+      addNotification('Bookmark Deleted', `"${target.title}" was removed from your bookmarks.`, 'info');
+      return true;
+    } catch (err: any) {
+      // Rollback to original state on failure
+      setLinks(originalLinks);
+      showToast(`Failed to delete bookmark: ${err?.message || 'Database error'}`, 'error');
+      console.error('Delete link failed:', err);
+      return false;
+    }
   };
 
   const togglePinLink = async (id: string) => {
@@ -527,12 +666,52 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const reorderLinks = async (categoryId: string, reordered: BookmarkLink[]) => {
+    const indexed = reordered.map((l, idx) => ({ ...l, order: idx + 1, categoryId }));
     setLinks(prev => {
       const otherLinks = prev.filter(l => l.categoryId !== categoryId);
-      return [...otherLinks, ...reordered];
+      const newAll = [...otherLinks, ...indexed];
+      dbService.saveAllLinks(newAll);
+      return newAll;
     });
-    for (const link of reordered) {
-      await dbService.saveLink(link);
+  };
+
+  const reorderCategories = async (reordered: LinkCategory[]) => {
+    const ordered = reordered.map((cat, idx) => ({ ...cat, order: idx + 1 }));
+    setCategories(ordered);
+    await dbService.saveAllCategories(ordered);
+  };
+
+  const moveLink = async (linkId: string, targetCategoryId: string, targetIndex?: number) => {
+    const link = links.find(l => l.id === linkId);
+    if (!link) return;
+
+    const updatedLink: BookmarkLink = {
+      ...link,
+      categoryId: targetCategoryId,
+    };
+
+    setLinks(prev => {
+      const otherCategoryLinks = prev.filter(l => l.id !== linkId && l.categoryId !== targetCategoryId);
+      const targetCategoryLinks = prev
+        .filter(l => l.id !== linkId && l.categoryId === targetCategoryId)
+        .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+      if (targetIndex !== undefined && targetIndex >= 0) {
+        targetCategoryLinks.splice(targetIndex, 0, updatedLink);
+      } else {
+        targetCategoryLinks.push(updatedLink);
+      }
+
+      const reorderedTarget = targetCategoryLinks.map((l, idx) => ({ ...l, order: idx + 1 }));
+      const newAllLinks = [...otherCategoryLinks, ...reorderedTarget];
+
+      dbService.saveAllLinks(newAllLinks);
+      return newAllLinks;
+    });
+
+    const targetCat = categories.find(c => c.id === targetCategoryId);
+    if (targetCat) {
+      showToast(`Moved link to ${targetCat.name}`);
     }
   };
 
@@ -684,7 +863,7 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
           particleCount: 70,
           spread: 70,
           origin: { y: 0.6 },
-          colors: ['#8b5cf6', '#10b981', '#3b82f6', '#f59e0b']
+          colors: ['#F5B942', '#D99A1C', '#10b981', '#ffffff']
         });
       } catch {
         // ignore
@@ -698,8 +877,13 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     };
 
     setTasks(prev => {
-      const otherStatusTasks = prev.filter(t => t.id !== taskId && t.status !== targetStatus);
-      const targetStatusTasks = prev.filter(t => t.id !== taskId && t.status === targetStatus);
+      const otherDashboardTasks = prev.filter(t => t.dashboardId !== task.dashboardId);
+      const currentDashTasks = prev.filter(t => t.dashboardId === task.dashboardId);
+
+      const otherStatusTasks = currentDashTasks.filter(t => t.id !== taskId && t.status !== targetStatus);
+      const targetStatusTasks = currentDashTasks
+        .filter(t => t.id !== taskId && t.status === targetStatus)
+        .sort((a, b) => a.order - b.order);
 
       if (targetIndex !== undefined && targetIndex >= 0) {
         targetStatusTasks.splice(targetIndex, 0, updatedTask);
@@ -708,11 +892,14 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
 
       const reorderedTarget = targetStatusTasks.map((t, idx) => ({ ...t, order: idx + 1 }));
-      return [...otherStatusTasks, ...reorderedTarget];
+
+      // Persist reordered tasks
+      reorderedTarget.forEach(t => dbService.saveTask(t));
+
+      return [...otherDashboardTasks, ...otherStatusTasks, ...reorderedTarget];
     });
 
-    await dbService.saveTask(updatedTask);
-    showToast(`Task moved to ${targetStatus.replace('_', ' ')}`);
+    showToast(`Task moved to ${targetStatus.replace('_', ' ').toUpperCase()}`);
   };
 
   const toggleSubtask = async (taskId: string, subtaskId: string) => {
@@ -880,6 +1067,7 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
       createdAt: new Date().toISOString(),
     };
 
+    cacheFile(newVaultFile.id, file);
     setFiles(prev => [newVaultFile, ...prev]);
     await dbService.saveFile(newVaultFile, file);
     showToast(`Uploaded "${file.name}"`);
@@ -907,6 +1095,12 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     setFiles(prev => [newFile, ...prev]);
     await dbService.saveFile(newFile);
     showToast(`Note "${fileName}" created`);
+  };
+
+  const addVaultFile = async (file: VaultFile) => {
+    setFiles(prev => [file, ...prev]);
+    await dbService.saveFile(file);
+    showToast(`Added "${file.name}"`);
   };
 
   const renameFile = async (id: string, newName: string) => {
@@ -969,13 +1163,13 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     setTheme('dark');
     setCurrentPage('links');
 
-    localStorage.setItem('myspace_user', JSON.stringify(INITIAL_USER));
-    localStorage.setItem('myspace_categories', JSON.stringify(INITIAL_CATEGORIES));
-    localStorage.setItem('myspace_links', JSON.stringify(INITIAL_LINKS));
-    localStorage.setItem('myspace_dashboards', JSON.stringify(INITIAL_DASHBOARDS));
-    localStorage.setItem('myspace_tasks', JSON.stringify(INITIAL_TASKS));
-    localStorage.setItem('myspace_folders', JSON.stringify(INITIAL_FOLDERS));
-    localStorage.setItem('myspace_files', JSON.stringify(INITIAL_FILES));
+    safeStorage.setItem('myspace_user', JSON.stringify(INITIAL_USER));
+    safeStorage.setItem('myspace_categories', JSON.stringify(INITIAL_CATEGORIES));
+    safeStorage.setItem('myspace_links', JSON.stringify(INITIAL_LINKS));
+    safeStorage.setItem('myspace_dashboards', JSON.stringify(INITIAL_DASHBOARDS));
+    safeStorage.setItem('myspace_tasks', JSON.stringify(INITIAL_TASKS));
+    safeStorage.setItem('myspace_folders', JSON.stringify(INITIAL_FOLDERS));
+    safeStorage.setItem('myspace_files', JSON.stringify(INITIAL_FILES));
 
     showToast('Workspace reset to factory defaults', 'info');
     addNotification('Reset Complete', 'Default workspace data restored.', 'info');
@@ -1008,31 +1202,31 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
       const data = JSON.parse(jsonData);
       if (data.categories) {
         setCategories(data.categories);
-        localStorage.setItem('myspace_categories', JSON.stringify(data.categories));
+        safeStorage.setItem('myspace_categories', JSON.stringify(data.categories));
       }
       if (data.links) {
         setLinks(data.links);
-        localStorage.setItem('myspace_links', JSON.stringify(data.links));
+        safeStorage.setItem('myspace_links', JSON.stringify(data.links));
       }
       if (data.dashboards) {
         setDashboards(data.dashboards);
-        localStorage.setItem('myspace_dashboards', JSON.stringify(data.dashboards));
+        safeStorage.setItem('myspace_dashboards', JSON.stringify(data.dashboards));
       }
       if (data.tasks) {
         setTasks(data.tasks);
-        localStorage.setItem('myspace_tasks', JSON.stringify(data.tasks));
+        safeStorage.setItem('myspace_tasks', JSON.stringify(data.tasks));
       }
       if (data.folders) {
         setFolders(data.folders);
-        localStorage.setItem('myspace_folders', JSON.stringify(data.folders));
+        safeStorage.setItem('myspace_folders', JSON.stringify(data.folders));
       }
       if (data.files) {
         setFiles(data.files);
-        localStorage.setItem('myspace_files', JSON.stringify(data.files));
+        safeStorage.setItem('myspace_files', JSON.stringify(data.files));
       }
       if (data.user) {
         setUser(data.user);
-        localStorage.setItem('myspace_user', JSON.stringify(data.user));
+        safeStorage.setItem('myspace_user', JSON.stringify(data.user));
       }
       showToast('Workspace data imported successfully');
       return true;
@@ -1086,6 +1280,8 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
         togglePinLink,
         trackLinkClick,
         reorderLinks,
+        reorderCategories,
+        moveLink,
         dashboards,
         activeDashboardId,
         setActiveDashboardId,
@@ -1123,6 +1319,7 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
         deleteFolder,
         uploadFile,
         createNoteFile,
+        addVaultFile,
         renameFile,
         deleteFile,
         deleteSelectedFiles,

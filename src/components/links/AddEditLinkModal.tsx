@@ -43,9 +43,9 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
     }
   }, [linkToEdit, defaultCategoryId, categories, isOpen]);
 
-  if (!isOpen) return null;
-
   const [errorMessage, setErrorMessage] = useState('');
+
+  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,7 +58,7 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
     }
 
     if (linkToEdit) {
-      await updateLink(linkToEdit.id, {
+      const ok = await updateLink(linkToEdit.id, {
         title: title.trim(),
         url: formattedUrl,
         categoryId,
@@ -66,6 +66,10 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
         notes: notes.trim(),
         iconBg: customIconBg,
       });
+      if (!ok) {
+        setErrorMessage('Failed to update bookmark or URL already exists.');
+        return;
+      }
       onClose();
     } else {
       const res = await addLink({
@@ -89,19 +93,19 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
-      <div className="w-full max-w-md bg-[#131929] border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in-50 zoom-in-95">
-        <div className="px-5 py-4 border-b border-slate-700/70 flex items-center justify-between bg-[#161c2e]">
+      <div className="w-full max-w-md theme-bg-card border theme-border-card rounded-2xl shadow-2xl overflow-hidden animate-in fade-in-50 zoom-in-95">
+        <div className="px-5 py-4 theme-divider border-b flex items-center justify-between theme-bg-card-secondary">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+            <div className="w-8 h-8 rounded-lg bg-[#F5B942]/10 border border-[#F5B942]/30 flex items-center justify-center text-[#D99A1C] dark:text-[#F5B942]">
               <Link2 className="w-4 h-4" />
             </div>
-            <h3 className="text-base font-semibold text-white">
+            <h3 className="text-base font-semibold theme-text-primary">
               {linkToEdit ? 'Edit Bookmark Link' : 'Add New Bookmark Link'}
             </h3>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1 rounded-lg theme-text-muted hover:theme-text-primary hover:theme-bg-card-hover transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -115,7 +119,7 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
           )}
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">
+            <label className="block text-xs font-semibold theme-text-primary mb-1">
               Website Name *
             </label>
             <input
@@ -124,12 +128,12 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. TradingView, GitHub, ChatGPT"
-              className="w-full px-3 py-2 bg-[#0d121f] border border-slate-700 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-purple-500"
+              className="w-full px-3 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-sm theme-text-primary placeholder:theme-text-muted focus:outline-none focus:border-[#F5B942]"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">
+            <label className="block text-xs font-semibold theme-text-primary mb-1">
               Destination URL *
             </label>
             <div className="relative">
@@ -139,38 +143,38 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="https://example.com"
-                className="w-full pl-9 pr-3 py-2 bg-[#0d121f] border border-slate-700 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                className="w-full pl-9 pr-3 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-sm theme-text-primary placeholder:theme-text-muted focus:outline-none focus:border-[#F5B942]"
               />
-              <Globe className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+              <Globe className="w-4 h-4 theme-text-muted absolute left-3 top-2.5" />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">
+            <label className="block text-xs font-semibold theme-text-primary mb-1">
               Category *
             </label>
             <div className="relative">
               <select
                 value={categoryId}
                 onChange={(e) => setCategoryId(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 bg-[#0d121f] border border-slate-700 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-purple-500"
+                className="w-full pl-9 pr-3 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-sm theme-text-primary focus:outline-none focus:border-[#F5B942]"
               >
                 {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
+                  <option key={c.id} value={c.id} className="theme-bg-card theme-text-primary">
                     {c.name}
                   </option>
                 ))}
               </select>
-              <Tag className="w-4 h-4 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
+              <Tag className="w-4 h-4 theme-text-muted absolute left-3 top-2.5 pointer-events-none" />
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+            <label className="block text-xs font-semibold theme-text-primary mb-1.5">
               Tile Badge Accent
             </label>
             <div className="flex items-center gap-2">
-              {bgOptions.map((bg) => (
+              {['#14120E', '#1A1711', '#241D12', '#3A2D19', '#F5B942', '#1e293b'].map((bg) => (
                 <button
                   type="button"
                   key={bg}
@@ -178,8 +182,8 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
                   style={{ backgroundColor: bg }}
                   className={`w-7 h-7 rounded-lg border transition-all ${
                     customIconBg === bg
-                      ? 'border-purple-400 ring-2 ring-purple-500/40 scale-110'
-                      : 'border-slate-700 hover:border-slate-500'
+                      ? 'border-[#F5B942] ring-2 ring-[#F5B942]/40 scale-110'
+                      : 'border-white/10 hover:border-[#F5B942]/60'
                   }`}
                 />
               ))}
@@ -187,31 +191,31 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
           </div>
 
           <div className="flex items-center justify-between pt-1">
-            <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-300">
+            <label className="flex items-center gap-2 cursor-pointer text-xs font-medium theme-text-secondary">
               <input
                 type="checkbox"
                 checked={pinned}
                 onChange={(e) => setPinned(e.target.checked)}
-                className="rounded border-slate-700 bg-slate-900 text-purple-600 focus:ring-purple-500"
+                className="rounded theme-border-card text-[#F5B942] focus:ring-[#F5B942]"
               />
               <span className="flex items-center gap-1.5">
-                <Star className={`w-3.5 h-3.5 ${pinned ? 'text-amber-400 fill-amber-400' : 'text-slate-400'}`} />
+                <Star className={`w-3.5 h-3.5 ${pinned ? 'text-[#F5B942] fill-[#F5B942]' : 'theme-text-muted'}`} />
                 Pin to Favourites
               </span>
             </label>
           </div>
 
-          <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+          <div className="pt-2 flex items-center justify-end gap-2 theme-divider border-t">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white bg-slate-800/60 hover:bg-slate-800 rounded-xl transition-colors"
+              className="px-4 py-2 text-xs font-medium theme-text-secondary hover:theme-text-primary theme-bg-card-secondary hover:theme-bg-card-hover rounded-xl transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-4 py-2 text-xs font-medium text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 rounded-xl shadow-lg shadow-purple-600/30 transition-all"
+              className="gold-btn px-4 py-2 text-xs font-semibold rounded-xl shadow-md cursor-pointer"
             >
               {linkToEdit ? 'Save Changes' : 'Add Link'}
             </button>

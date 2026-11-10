@@ -19,20 +19,20 @@ export const ToastContainer: React.FC = () => {
             case 'error':
               return <XCircle className="w-4 h-4 text-rose-400 shrink-0" />;
             default:
-              return <Info className="w-4 h-4 text-purple-400 shrink-0" />;
+              return <Info className="w-4 h-4 text-[#D99A1C] dark:text-[#F5B942] shrink-0" />;
           }
         };
 
         const getBorder = () => {
           switch (toast.type) {
             case 'success':
-              return 'border-emerald-500/30 bg-[#121f1e] text-emerald-200';
+              return 'border-emerald-500/40 bg-[#121f1e] text-emerald-200';
             case 'warning':
-              return 'border-amber-500/30 bg-[#241a10] text-amber-200';
+              return 'border-amber-500/40 bg-[#241a10] text-amber-200';
             case 'error':
-              return 'border-rose-500/30 bg-[#251016] text-rose-200';
+              return 'border-rose-500/40 bg-[#251016] text-rose-200';
             default:
-              return 'border-purple-500/30 bg-[#17152b] text-purple-200';
+              return 'border-[#F5B942]/40 bg-[#1A1711] text-[#F5B942]';
           }
         };
 

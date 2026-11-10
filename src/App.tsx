@@ -15,7 +15,7 @@ const MainAppContent: React.FC = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-[#0b0f19] text-slate-100 flex flex-col md:flex-row antialiased selection:bg-purple-600/30 selection:text-purple-200">
+    <div className="h-[100dvh] w-screen overflow-hidden theme-bg-main theme-text-primary flex flex-col md:flex-row antialiased selection:bg-[#F5B942]/30 selection:text-[#F5B942] transition-colors duration-200">
       {/* Persistent Left Sidebar */}
       <Sidebar
         isMobileOpen={isMobileMenuOpen}
@@ -23,16 +23,17 @@ const MainAppContent: React.FC = () => {
       />
 
       {/* Main Content Viewport */}
-      <div className="flex-1 flex flex-col min-w-0 min-h-screen">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden theme-bg-content">
         {/* Top Header */}
         <Header onToggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)} />
 
         {/* Dynamic Page Component */}
-        <main className="flex-1 pb-16">
+        <main className="flex-1 min-h-0 overflow-hidden flex flex-col">
           {currentPage === 'links' && <LinksView />}
           {currentPage === 'work-list' && <WorkListView />}
           {currentPage === 'vault' && <VaultView />}
           {currentPage === 'settings' && <SettingsView />}
+          {!['links', 'work-list', 'vault', 'settings'].includes(currentPage) && <LinksView />}
         </main>
       </div>
 

@@ -74,14 +74,14 @@ export const AddEditCategoryModal: React.FC<AddEditCategoryModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
-      <div className="w-full max-w-md bg-[#131929] border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in-50 zoom-in-95">
-        <div className="px-5 py-4 border-b border-slate-700/70 flex items-center justify-between bg-[#161c2e]">
-          <h3 className="text-base font-semibold text-white">
+      <div className="w-full max-w-md theme-bg-card border theme-border-card rounded-2xl shadow-2xl overflow-hidden animate-in fade-in-50 zoom-in-95">
+        <div className="px-5 py-4 theme-divider border-b flex items-center justify-between theme-bg-card-secondary">
+          <h3 className="text-base font-semibold theme-text-primary">
             {categoryToEdit ? 'Edit Category' : 'Create Category'}
           </h3>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1 rounded-lg theme-text-muted hover:theme-text-primary hover:theme-bg-card-hover transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -89,7 +89,7 @@ export const AddEditCategoryModal: React.FC<AddEditCategoryModalProps> = ({
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">
+            <label className="block text-xs font-semibold theme-text-primary mb-1">
               Category Name *
             </label>
             <input
@@ -98,12 +98,12 @@ export const AddEditCategoryModal: React.FC<AddEditCategoryModalProps> = ({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Design Systems, Crypto, Gaming"
-              className="w-full px-3 py-2 bg-[#0d121f] border border-slate-700 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-purple-500"
+              className="w-full px-3 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-sm theme-text-primary placeholder:theme-text-muted focus:outline-none focus:border-[#F5B942]"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+            <label className="block text-xs font-semibold theme-text-primary mb-1.5">
               Icon Symbol
             </label>
             <div className="grid grid-cols-6 gap-2">
@@ -114,8 +114,8 @@ export const AddEditCategoryModal: React.FC<AddEditCategoryModalProps> = ({
                   onClick={() => setSelectedIcon(iconName)}
                   className={`p-2.5 rounded-xl border flex items-center justify-center transition-all ${
                     selectedIcon === iconName
-                      ? 'bg-purple-600/30 border-purple-400 text-purple-200 ring-2 ring-purple-500/30'
-                      : 'bg-[#0d121f] border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+                      ? 'bg-[#F5B942]/20 border-[#F5B942] text-[#D99A1C] dark:text-[#F5B942] ring-2 ring-[#F5B942]/30'
+                      : 'theme-bg-card-inner theme-border-card theme-text-muted hover:theme-text-primary hover:border-[#F5B942]/40'
                   }`}
                 >
                   <IconComponent className="w-4 h-4" />
@@ -125,7 +125,7 @@ export const AddEditCategoryModal: React.FC<AddEditCategoryModalProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+            <label className="block text-xs font-semibold theme-text-primary mb-1.5">
               Theme Color
             </label>
             <div className="flex items-center gap-2">
@@ -137,7 +137,7 @@ export const AddEditCategoryModal: React.FC<AddEditCategoryModalProps> = ({
                   style={{ backgroundColor: color }}
                   className={`w-7 h-7 rounded-lg transition-transform ${
                     selectedColor === color
-                      ? 'scale-125 ring-2 ring-white/80 shadow-md'
+                      ? 'scale-125 ring-2 ring-[#F5B942] shadow-md'
                       : 'opacity-70 hover:opacity-100'
                   }`}
                 />
@@ -145,17 +145,17 @@ export const AddEditCategoryModal: React.FC<AddEditCategoryModalProps> = ({
             </div>
           </div>
 
-          <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+          <div className="pt-2 flex items-center justify-end gap-2 theme-divider border-t">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white bg-slate-800/60 hover:bg-slate-800 rounded-xl transition-colors"
+              className="px-4 py-2 text-xs font-medium theme-text-secondary hover:theme-text-primary theme-bg-card-secondary hover:theme-bg-card-hover rounded-xl transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-4 py-2 text-xs font-medium text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 rounded-xl shadow-lg shadow-purple-600/30 transition-all"
+              className="gold-btn px-4 py-2 text-xs font-semibold rounded-xl shadow-md transition-all cursor-pointer"
             >
               {categoryToEdit ? 'Save Changes' : 'Create Category'}
             </button>

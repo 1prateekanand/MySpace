@@ -29,6 +29,7 @@ export interface BookmarkLink {
   iconBg?: string;
   pinned?: boolean;
   notes?: string;
+  order?: number;
   clickCount: number;
   createdAt: string;
 }
@@ -36,7 +37,7 @@ export interface BookmarkLink {
 // ============ WORK LIST & TASK TYPES ============
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'on_hold';
 export type TaskPriority = 'low' | 'medium' | 'high';
-export type WorkListViewMode = 'board' | 'list' | 'table' | 'analytics';
+export type WorkListViewMode = 'board' | 'table' | 'analytics';
 
 export interface TaskSubtask {
   id: string;
@@ -65,6 +66,7 @@ export interface TaskItem {
   dashboardId: string;
   title: string;
   description?: string;
+  notes?: string;
   status: TaskStatus;
   priority: TaskPriority;
   categoryTag?: string; // e.g. "Trading", "Backend", "AI/ML", "DevOps", "Frontend"
@@ -112,6 +114,8 @@ export interface VaultFile {
   mimeType?: string;
   contentDataUrl?: string; // for uploaded images / text files
   textContent?: string;
+  storagePath?: string; // Supabase storage path if uploaded
+  googleDocUrl?: string; // For Google Docs, Sheets, and Slides
   tags?: string[];
   updatedAt: string;
   createdAt: string;
