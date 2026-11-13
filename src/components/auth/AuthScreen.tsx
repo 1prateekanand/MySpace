@@ -10,6 +10,8 @@ import {
   Eye,
   EyeOff,
   Loader2,
+  Download,
+  X,
 } from 'lucide-react';
 import { useMySpace } from '../../context/MySpaceContext';
 import { MySpaceLogo } from '../common/MySpaceLogo';
@@ -17,12 +19,48 @@ import { MySpaceLogo } from '../common/MySpaceLogo';
 const TRANSITION_MS = 700;
 const PROMO_BG_IMAGE = '/assets/aistudio/Golden_Autumn_Forest_Creek_and_Footbridge_3ac7f984.png';
 
+const GoogleLogo: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+  <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+    <path
+      fill="#4285F4"
+      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+    />
+    <path
+      fill="#34A853"
+      d="M12 24c3.3 0 6.08-1.09 8.11-2.96l-3.88-3.05c-1.1.74-2.51 1.18-4.23 1.18-3.25 0-6.01-2.19-7-5.15H.98v3.14C3.05 21.3 7.21 24 12 24Z"
+    />
+    <path
+      fill="#FBBC05"
+      d="M5 14.02c-.25-.74-.39-1.54-.39-2.36 0-.82.14-1.62.39-2.36V6.16H.98C.35 7.42 0 8.83 0 11.66c0 2.83.35 4.24.98 5.5L5 14.02Z"
+    />
+    <path
+      fill="#EA4335"
+      d="M12 4.75c1.8 0 3.41.62 4.68 1.84l3.51-3.51C18.07 1.19 15.3 0 12 0 7.21 0 3.05 2.7.98 6.84L5 9.98C5.99 7.02 8.75 4.75 12 4.75Z"
+    />
+  </svg>
+);
+
+const GitHubLogo: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+    <path
+      fillRule="evenodd"
+      clipRule="evenodd"
+      d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12Z"
+    />
+  </svg>
+);
+
 export const AuthScreen: React.FC = () => {
   const {
     signInWithSupabase,
     signUpWithSupabase,
+    signInWithOAuth,
+    oauthError,
+    clearOauthError,
     signInAsGuest,
     resetPasswordWithSupabase,
+    legacyLocalAccounts,
+    exportLegacyWorkspaceBackup,
   } = useMySpace();
 
   // Mode: false = Sign In (default), true = Create Account
@@ -57,6 +95,21 @@ export const AuthScreen: React.FC = () => {
   const [successMsg, setSuccessMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isGuestLoading, setIsGuestLoading] = useState(false);
+  const [oauthLoadingProvider, setOauthLoadingProvider] = useState<'google' | 'github' | null>(null);
+
+  // Legacy Local Account Migration Backup Modal State (shown only if legacy accounts exist)
+  const [isLegacyModalOpen, setIsLegacyModalOpen] = useState(false);
+  const [selectedLegacyNs, setSelectedLegacyNs] = useState('');
+  const [legacyPin, setLegacyPin] = useState('');
+  const [legacyMsg, setLegacyMsg] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [legacyExporting, setLegacyExporting] = useState(false);
+
+  useEffect(() => {
+    if (oauthError) {
+      setErrorMsg(oauthError);
+      clearOauthError();
+    }
+  }, [oauthError, clearOauthError]);
 
   useEffect(() => {
     return () => {
@@ -68,7 +121,7 @@ export const AuthScreen: React.FC = () => {
 
   const switchMode = useCallback(
     (targetSignUp: boolean) => {
-      if (isAnimating || isLoading || isGuestLoading) return;
+      if (isAnimating || isLoading || isGuestLoading || oauthLoadingProvider) return;
       if (targetSignUp === isSignUp) return;
 
       setErrorMsg('');
@@ -84,12 +137,12 @@ export const AuthScreen: React.FC = () => {
         setIsAnimating(false);
       }, TRANSITION_MS);
     },
-    [isAnimating, isLoading, isGuestLoading, isSignUp]
+    [isAnimating, isLoading, isGuestLoading, oauthLoadingProvider, isSignUp]
   );
 
   // Interactive Pointer / Touch Drag for Desktop Promotional Overlay
   const handleDesktopOverlayPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (isAnimating || isLoading || isGuestLoading) return;
+    if (isAnimating || isLoading || isGuestLoading || oauthLoadingProvider) return;
     if ((e.target as HTMLElement).closest('button, a, input')) return;
     if (!containerRef.current) return;
 
@@ -158,7 +211,7 @@ export const AuthScreen: React.FC = () => {
 
   // Interactive Pointer / Touch Swipe for Mobile Card
   const handleMobilePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (isAnimating || isLoading || isGuestLoading) return;
+    if (isAnimating || isLoading || isGuestLoading || oauthLoadingProvider) return;
     if ((e.target as HTMLElement).closest('button, a, input, label')) return;
     if (!mobileContainerRef.current) return;
 
@@ -327,9 +380,29 @@ export const AuthScreen: React.FC = () => {
     }
   };
 
+  // Social OAuth Handler (Google / GitHub)
+  const handleOAuthLogin = async (provider: 'google' | 'github') => {
+    if (isLoading || isGuestLoading || oauthLoadingProvider) return;
+    setErrorMsg('');
+    setSuccessMsg('');
+    setOauthLoadingProvider(provider);
+    try {
+      const res = await signInWithOAuth(provider);
+      if (res.error) {
+        setErrorMsg(res.error);
+      }
+    } catch (err: any) {
+      setErrorMsg(
+        err?.message || `Unable to sign in with ${provider === 'google' ? 'Google' : 'GitHub'}.`
+      );
+    } finally {
+      setOauthLoadingProvider(null);
+    }
+  };
+
   // Guest Account Handler
   const handleGuestLogin = async () => {
-    if (isLoading || isGuestLoading) return;
+    if (isLoading || isGuestLoading || oauthLoadingProvider) return;
     setErrorMsg('');
     setSuccessMsg('');
     setIsGuestLoading(true);
@@ -357,8 +430,8 @@ export const AuthScreen: React.FC = () => {
 
   // Shared Brand Header inside forms
   const renderBrandHeader = () => (
-    <div className="flex items-center justify-center gap-3 mb-4 select-none">
-      <MySpaceLogo size="md" className="w-10 h-10 sm:w-11 sm:h-11 shadow-[0_0_20px_rgba(245,185,66,0.3)]" />
+    <div className="flex items-center justify-center gap-3 mb-3 select-none">
+      <MySpaceLogo size="md" className="w-9 h-9 sm:w-10 sm:h-10 shadow-[0_0_20px_rgba(245,185,66,0.3)]" />
       <span className="text-2xl sm:text-[26px] font-extrabold tracking-tight text-white">
         My<span className="text-[#F5B942]">Space</span>
       </span>
@@ -369,13 +442,13 @@ export const AuthScreen: React.FC = () => {
   const renderFeedback = () => (
     <>
       {errorMsg && (
-        <div className="mb-3.5 px-3.5 py-2.5 rounded-xl bg-rose-950/50 border border-rose-500/40 text-rose-200 text-xs flex items-center gap-2 animate-in fade-in">
+        <div className="mb-3 px-3.5 py-2 rounded-xl bg-rose-950/50 border border-rose-500/40 text-rose-200 text-xs flex items-center gap-2 animate-in fade-in">
           <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
           <span className="leading-snug">{errorMsg}</span>
         </div>
       )}
       {successMsg && (
-        <div className="mb-3.5 px-3.5 py-2.5 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-emerald-200 text-xs flex items-center gap-2 animate-in fade-in">
+        <div className="mb-3 px-3.5 py-2 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-emerald-200 text-xs flex items-center gap-2 animate-in fade-in">
           <ShieldCheck className="w-4 h-4 shrink-0 text-emerald-400" />
           <span className="leading-snug">{successMsg}</span>
         </div>
@@ -383,9 +456,49 @@ export const AuthScreen: React.FC = () => {
     </>
   );
 
+  // Shared Social Authentication Buttons (Google & GitHub)
+  const renderSocialAuthButtons = () => {
+    const anyBusy = isLoading || isGuestLoading || oauthLoadingProvider !== null;
+    return (
+      <div className="mt-2.5 space-y-2.5">
+        <button
+          type="button"
+          onClick={() => handleOAuthLogin('google')}
+          disabled={anyBusy}
+          className="w-full py-2.5 px-5 rounded-full bg-[#0F0F13] hover:bg-[#19160E] border border-[#F5B942]/40 hover:border-[#F5B942] text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2.5 transition-all cursor-pointer disabled:opacity-50 shadow-[0_0_14px_rgba(245,185,66,0.06)]"
+        >
+          {oauthLoadingProvider === 'google' ? (
+            <Loader2 className="w-4 h-4 text-[#F5B942] animate-spin" />
+          ) : (
+            <GoogleLogo className="w-4 h-4 shrink-0" />
+          )}
+          <span>
+            {oauthLoadingProvider === 'google' ? 'Connecting to Google...' : 'Continue with Google'}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleOAuthLogin('github')}
+          disabled={anyBusy}
+          className="w-full py-2.5 px-5 rounded-full bg-[#0F0F13] hover:bg-[#19160E] border border-[#F5B942]/40 hover:border-[#F5B942] text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2.5 transition-all cursor-pointer disabled:opacity-50 shadow-[0_0_14px_rgba(245,185,66,0.06)]"
+        >
+          {oauthLoadingProvider === 'github' ? (
+            <Loader2 className="w-4 h-4 text-[#F5B942] animate-spin" />
+          ) : (
+            <GitHubLogo className="w-4 h-4 shrink-0 text-white" />
+          )}
+          <span>
+            {oauthLoadingProvider === 'github' ? 'Connecting to GitHub...' : 'Continue with GitHub'}
+          </span>
+        </button>
+      </div>
+    );
+  };
+
   // Shared OR + Use Guest Account Footer
   const renderGuestSection = () => (
-    <div className="mt-4 space-y-3.5">
+    <div className="mt-3 space-y-3">
       <div className="flex items-center gap-3">
         <div className="flex-1 h-px bg-zinc-800" />
         <span className="text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">OR</span>
@@ -395,7 +508,7 @@ export const AuthScreen: React.FC = () => {
       <button
         type="button"
         onClick={handleGuestLogin}
-        disabled={isLoading || isGuestLoading}
+        disabled={isLoading || isGuestLoading || oauthLoadingProvider !== null}
         className="w-full py-2.5 px-5 rounded-full bg-[#0F0F13] hover:bg-[#19160E] border border-[#F5B942]/65 hover:border-[#F5B942] text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50 shadow-[0_0_16px_rgba(245,185,66,0.08)]"
       >
         {isGuestLoading ? (
@@ -405,6 +518,22 @@ export const AuthScreen: React.FC = () => {
         )}
         <span>{isGuestLoading ? 'Opening Guest Workspace...' : 'Use Guest Account'}</span>
       </button>
+
+      {legacyLocalAccounts.length > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            setSelectedLegacyNs(legacyLocalAccounts[0].namespace);
+            setLegacyPin('');
+            setLegacyMsg(null);
+            setIsLegacyModalOpen(true);
+          }}
+          className="w-full py-1.5 text-[11px] font-medium text-[#F5B942]/90 hover:text-[#FFD15C] hover:underline flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+        >
+          <Download className="w-3.5 h-3.5" />
+          <span>Migrate Existing Local Workspace (.myspace.enc)</span>
+        </button>
+      )}
     </div>
   );
 
@@ -475,16 +604,16 @@ export const AuthScreen: React.FC = () => {
     return (
       <div className="w-full max-w-[330px] mx-auto flex flex-col justify-center">
         {renderBrandHeader()}
-        <h2 className="text-2xl sm:text-[28px] font-extrabold text-white tracking-tight text-center">
+        <h2 className="text-2xl sm:text-[26px] font-extrabold text-white tracking-tight text-center">
           Sign In
         </h2>
-        <p className="text-xs text-zinc-400 text-center mt-1 mb-6">
+        <p className="text-xs text-zinc-400 text-center mt-1 mb-4">
           Welcome back! Sign in to your workspace
         </p>
 
         {renderFeedback()}
 
-        <form onSubmit={handleSignInSubmit} className="space-y-3.5">
+        <form onSubmit={handleSignInSubmit} className="space-y-3">
           <div className="relative">
             <input
               type="email"
@@ -494,7 +623,7 @@ export const AuthScreen: React.FC = () => {
               onChange={(e) => setSignInEmail(e.target.value)}
               placeholder="Email Address"
               aria-label="Email Address"
-              className="w-full pl-10 pr-4 py-3 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
+              className="w-full pl-10 pr-4 py-2.5 sm:py-3 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
             />
             <Mail className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
@@ -508,7 +637,7 @@ export const AuthScreen: React.FC = () => {
               onChange={(e) => setSignInPassword(e.target.value)}
               placeholder="Password"
               aria-label="Password"
-              className="w-full pl-10 pr-10 py-3 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
+              className="w-full pl-10 pr-10 py-2.5 sm:py-3 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
             />
             <Lock className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             <button
@@ -538,8 +667,8 @@ export const AuthScreen: React.FC = () => {
 
           <button
             type="submit"
-            disabled={isLoading || isGuestLoading}
-            className="w-full py-3 px-5 rounded-full bg-gradient-to-r from-[#F9D06B] via-[#F5B942] to-[#E5A92D] text-[#0A0803] font-bold text-xs sm:text-sm shadow-[0_6px_22px_rgba(245,185,66,0.3)] hover:brightness-105 active:scale-[0.99] transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            disabled={isLoading || isGuestLoading || oauthLoadingProvider !== null}
+            className="w-full py-2.5 px-5 rounded-full bg-gradient-to-r from-[#F9D06B] via-[#F5B942] to-[#E5A92D] text-[#0A0803] font-bold text-xs sm:text-sm shadow-[0_6px_22px_rgba(245,185,66,0.3)] hover:brightness-105 active:scale-[0.99] transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
           >
             {isLoading ? (
               <>
@@ -555,6 +684,7 @@ export const AuthScreen: React.FC = () => {
           </button>
         </form>
 
+        {renderSocialAuthButtons()}
         {renderGuestSection()}
       </div>
     );
@@ -564,16 +694,16 @@ export const AuthScreen: React.FC = () => {
   const renderSignUpPanelContent = () => (
     <div className="w-full max-w-[330px] mx-auto flex flex-col justify-center">
       {renderBrandHeader()}
-      <h2 className="text-2xl sm:text-[28px] font-extrabold text-white tracking-tight text-center">
+      <h2 className="text-2xl sm:text-[26px] font-extrabold text-white tracking-tight text-center">
         Create Account
       </h2>
-      <p className="text-xs text-zinc-400 text-center mt-1 mb-5">
+      <p className="text-xs text-zinc-400 text-center mt-1 mb-3.5">
         Set up your personal workspace in minutes.
       </p>
 
       {renderFeedback()}
 
-      <form onSubmit={handleSignUpSubmit} className="space-y-3">
+      <form onSubmit={handleSignUpSubmit} className="space-y-2.5">
         <div className="relative">
           <input
             type="text"
@@ -583,7 +713,7 @@ export const AuthScreen: React.FC = () => {
             onChange={(e) => setFullName(e.target.value)}
             placeholder="Full Name"
             aria-label="Full Name"
-            className="w-full pl-10 pr-4 py-2.5 sm:py-3 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
+            className="w-full pl-10 pr-4 py-2.5 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
           />
           <User className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
         </div>
@@ -597,7 +727,7 @@ export const AuthScreen: React.FC = () => {
             onChange={(e) => setSignUpEmail(e.target.value)}
             placeholder="Email Address"
             aria-label="Email Address"
-            className="w-full pl-10 pr-4 py-2.5 sm:py-3 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
+            className="w-full pl-10 pr-4 py-2.5 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
           />
           <Mail className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
         </div>
@@ -611,7 +741,7 @@ export const AuthScreen: React.FC = () => {
             onChange={(e) => setSignUpPassword(e.target.value)}
             placeholder="Password"
             aria-label="Password"
-            className="w-full pl-10 pr-10 py-2.5 sm:py-3 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
+            className="w-full pl-10 pr-10 py-2.5 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
           />
           <Lock className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <button
@@ -633,7 +763,7 @@ export const AuthScreen: React.FC = () => {
             onChange={(e) => setConfirmPassword(e.target.value)}
             placeholder="Confirm Password"
             aria-label="Confirm Password"
-            className="w-full pl-10 pr-10 py-2.5 sm:py-3 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
+            className="w-full pl-10 pr-10 py-2.5 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs sm:text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#F5B942] focus:ring-1 focus:ring-[#F5B942]/40 transition-all"
           />
           <Lock className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <button
@@ -648,8 +778,8 @@ export const AuthScreen: React.FC = () => {
 
         <button
           type="submit"
-          disabled={isLoading || isGuestLoading}
-          className="w-full py-3 px-5 mt-1 rounded-full bg-gradient-to-r from-[#F9D06B] via-[#F5B942] to-[#E5A92D] text-[#0A0803] font-bold text-xs sm:text-sm shadow-[0_6px_22px_rgba(245,185,66,0.3)] hover:brightness-105 active:scale-[0.99] transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+          disabled={isLoading || isGuestLoading || oauthLoadingProvider !== null}
+          className="w-full py-2.5 px-5 mt-1 rounded-full bg-gradient-to-r from-[#F9D06B] via-[#F5B942] to-[#E5A92D] text-[#0A0803] font-bold text-xs sm:text-sm shadow-[0_6px_22px_rgba(245,185,66,0.3)] hover:brightness-105 active:scale-[0.99] transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
         >
           {isLoading ? (
             <>
@@ -665,6 +795,7 @@ export const AuthScreen: React.FC = () => {
         </button>
       </form>
 
+      {renderSocialAuthButtons()}
       {renderGuestSection()}
     </div>
   );
@@ -716,7 +847,7 @@ export const AuthScreen: React.FC = () => {
       {/* ================================================================= */}
       <div
         ref={containerRef}
-        className="hidden md:block relative z-10 w-full max-w-[920px] min-h-[620px] rounded-[28px] bg-[#0B0B0E] border border-[#F5B942]/75 shadow-[0_0_60px_rgba(245,185,66,0.2)] overflow-hidden"
+        className="hidden md:block relative z-10 w-full max-w-[920px] min-h-[680px] rounded-[28px] bg-[#0B0B0E] border border-[#F5B942]/75 shadow-[0_0_60px_rgba(245,185,66,0.2)] overflow-hidden"
       >
         {/* 1. Sign In Form Panel (Starts at Left, slides & fades out right when switching to Create Account) */}
         <div
@@ -894,6 +1025,108 @@ export const AuthScreen: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Legacy Pre-Supabase Local Workspace Backup Modal (only shown when requested) */}
+      {isLegacyModalOpen && legacyLocalAccounts.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl bg-[#111115] border border-[#F5B942]/50 p-6 shadow-2xl space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-white">Export Legacy Local Workspace</h3>
+                <p className="text-xs text-zinc-400 mt-1">
+                  Unlock your previous browser workspace with its Vault PIN to download an encrypted <code className="text-[#F5B942]">.myspace.enc</code> backup before registering in Supabase Auth.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsLegacyModalOpen(false)}
+                className="p-1 text-zinc-400 hover:text-white rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {legacyMsg && (
+              <div
+                className={`p-3 rounded-xl text-xs flex items-center gap-2 border ${
+                  legacyMsg.type === 'error'
+                    ? 'bg-rose-950/50 border-rose-500/40 text-rose-200'
+                    : 'bg-emerald-950/50 border-emerald-500/40 text-emerald-200'
+                }`}
+              >
+                <span>{legacyMsg.text}</span>
+              </div>
+            )}
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const acct =
+                  legacyLocalAccounts.find((a) => a.namespace === selectedLegacyNs) ||
+                  legacyLocalAccounts[0];
+                if (!acct || !legacyPin) return;
+                setLegacyMsg(null);
+                setLegacyExporting(true);
+                try {
+                  const res = await exportLegacyWorkspaceBackup(acct.namespace, acct.email, legacyPin);
+                  if (res.success) {
+                    setLegacyMsg({
+                      type: 'success',
+                      text: `Downloaded ${res.filename}. Next, create your Supabase account with ${acct.email}, set a Vault PIN, and import this backup.`,
+                    });
+                    setLegacyPin('');
+                  } else {
+                    setLegacyMsg({ type: 'error', text: res.error || 'Export failed.' });
+                  }
+                } finally {
+                  setLegacyExporting(false);
+                }
+              }}
+              className="space-y-3.5"
+            >
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                  Detected Local Account
+                </label>
+                <select
+                  value={selectedLegacyNs}
+                  onChange={(e) => setSelectedLegacyNs(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-[#F5B942]"
+                >
+                  {legacyLocalAccounts.map((acct) => (
+                    <option key={acct.namespace} value={acct.namespace}>
+                      {acct.email} ({acct.name})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">
+                  Legacy Vault PIN
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={legacyPin}
+                  onChange={(e) => setLegacyPin(e.target.value)}
+                  placeholder="Enter Vault PIN for this local workspace"
+                  className="w-full px-3.5 py-2.5 bg-[#121216] border border-zinc-700/75 rounded-xl text-xs text-zinc-100 focus:outline-none focus:border-[#F5B942]"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={legacyExporting || !legacyPin}
+                className="w-full py-2.5 rounded-full bg-gradient-to-r from-[#F9D06B] via-[#F5B942] to-[#E5A92D] text-[#0A0803] font-bold text-xs flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <Download className="w-4 h-4" />
+                <span>{legacyExporting ? 'Decrypting & Exporting...' : 'Export .myspace.enc Backup'}</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

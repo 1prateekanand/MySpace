@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   User,
   Moon,
@@ -8,6 +8,8 @@ import {
   RotateCcw,
   Check,
   Save,
+  ShieldCheck,
+  Lock,
 } from 'lucide-react';
 import { useMySpace } from '../../context/MySpaceContext';
 import { MySpaceLogo } from '../common/MySpaceLogo';
@@ -15,6 +17,7 @@ import { MySpaceLogo } from '../common/MySpaceLogo';
 export const SettingsView: React.FC = () => {
   const {
     user,
+    supabaseUser,
     updateUser,
     theme,
     toggleTheme,
@@ -24,25 +27,44 @@ export const SettingsView: React.FC = () => {
     addNotification,
   } = useMySpace();
 
-  const [name, setName] = useState(user?.name || 'Prateek Anand');
-  const [email, setEmail] = useState(user?.email || 'prateekanand02@gmail.com');
-  const [role, setRole] = useState(user?.role || 'Product Engineer');
-  const [initials, setInitials] = useState(user?.initials || 'PA');
+  const authoritativeEmail = supabaseUser?.email || user?.email || '';
+  const isGuest = Boolean(supabaseUser?.isGuest || supabaseUser?.id === 'user-demo-01');
+
+  const [name, setName] = useState(supabaseUser?.name || user?.name || 'MySpace User');
+  const [role, setRole] = useState(user?.role || 'Workspace Member');
+  const [initials, setInitials] = useState(user?.initials || 'MU');
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const importFileRef = useRef<HTMLInputElement>(null);
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  useEffect(() => {
+    setName(supabaseUser?.name || user?.name || 'MySpace User');
+    setRole(user?.role || '');
+    setInitials(user?.initials || 'MU');
+  }, [supabaseUser?.name, user?.name, user?.role, user?.initials]);
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateUser({
-      name: name.trim(),
-      email: email.trim(),
-      role: role.trim(),
-      initials: initials.trim() || name.slice(0, 2).toUpperCase(),
-    });
-    setSavedSuccess(true);
-    addNotification('Profile Updated', 'Your profile settings have been saved.', 'success');
-    setTimeout(() => setSavedSuccess(false), 2500);
+    setIsSaving(true);
+    try {
+      await updateUser({
+        name: name.trim(),
+        role: role.trim(),
+        initials: initials.trim() || name.slice(0, 2).toUpperCase(),
+      });
+      setSavedSuccess(true);
+      addNotification(
+        'Profile Updated',
+        isGuest
+          ? 'Your local guest profile preferences have been saved.'
+          : 'Your Supabase account display name and workspace preferences have been saved.',
+        'success'
+      );
+      setTimeout(() => setSavedSuccess(false), 2500);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -85,8 +107,29 @@ export const SettingsView: React.FC = () => {
             </div>
           </div>
 
-          <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#D99A1C] to-[#F5B942] text-black font-bold text-sm flex items-center justify-center ring-2 ring-[#F5B942]/40 shadow-sm">
-            {initials}
+          <div className="flex items-center gap-3">
+            <span
+              className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${
+                isGuest
+                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                  : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              {isGuest
+                ? 'Guest Local Session'
+                : `Supabase Auth (${
+                    supabaseUser?.provider === 'google'
+                      ? 'Google'
+                      : supabaseUser?.provider === 'github'
+                      ? 'GitHub'
+                      : 'Email'
+                  })`}
+            </span>
+
+            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#D99A1C] to-[#F5B942] text-black font-bold text-sm flex items-center justify-center ring-2 ring-[#F5B942]/40 shadow-sm">
+              {initials}
+            </div>
           </div>
         </div>
 
@@ -94,7 +137,7 @@ export const SettingsView: React.FC = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold theme-text-secondary mb-1">
-                Full Name
+                Full Name {!isGuest && <span className="text-[10px] theme-text-muted font-normal">(Synced with Supabase Auth)</span>}
               </label>
               <input
                 type="text"
@@ -103,7 +146,7 @@ export const SettingsView: React.FC = () => {
                 onChange={(e) => {
                   setName(e.target.value);
                   const parts = e.target.value.trim().split(' ');
-                  if (parts.length >= 2) {
+                  if (parts.length >= 2 && parts[1]) {
                     setInitials(`${parts[0][0]}${parts[1][0]}`.toUpperCase());
                   } else if (parts[0]) {
                     setInitials(parts[0].slice(0, 2).toUpperCase());
@@ -115,7 +158,7 @@ export const SettingsView: React.FC = () => {
 
             <div>
               <label className="block text-xs font-semibold theme-text-secondary mb-1">
-                Initials Badge
+                Initials Badge <span className="text-[10px] theme-text-muted font-normal">(Local preference)</span>
               </label>
               <input
                 type="text"
@@ -127,21 +170,24 @@ export const SettingsView: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold theme-text-secondary mb-1">
-                Email Address
+              <label className="flex items-center justify-between text-xs font-semibold theme-text-secondary mb-1">
+                <span>Email Address</span>
+                <span className="inline-flex items-center gap-1 text-[10px] theme-text-muted font-normal">
+                  <Lock className="w-3 h-3" />
+                  {isGuest ? 'Guest identity' : 'Managed by Supabase Auth'}
+                </span>
               </label>
               <input
                 type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-3.5 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-xs theme-text-primary focus:outline-none focus:border-[#F5B942]"
+                readOnly
+                value={authoritativeEmail}
+                className="w-full px-3.5 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-xs theme-text-muted opacity-80 cursor-not-allowed focus:outline-none"
               />
             </div>
 
             <div>
               <label className="block text-xs font-semibold theme-text-secondary mb-1">
-                Workspace Role
+                Workspace Role <span className="text-[10px] theme-text-muted font-normal">(Local preference)</span>
               </label>
               <input
                 type="text"
@@ -153,10 +199,24 @@ export const SettingsView: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center justify-end pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+            <div className="text-[11px] theme-text-muted">
+              {isGuest ? (
+                <span>Status: Guest local workspace (not synced to cloud directory)</span>
+              ) : (
+                <span>
+                  Auth ID:{' '}
+                  <code className="font-mono text-[#D99A1C] dark:text-[#F5B942]">
+                    {supabaseUser?.id}
+                  </code>
+                </span>
+              )}
+            </div>
+
             <button
               type="submit"
-              className="px-5 py-2 gold-btn font-semibold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all"
+              disabled={isSaving}
+              className="px-5 py-2 gold-btn font-semibold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all disabled:opacity-60"
             >
               {savedSuccess ? (
                 <>
@@ -164,7 +224,7 @@ export const SettingsView: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <Save className="w-3.5 h-3.5" /> Save Profile
+                  <Save className="w-3.5 h-3.5" /> {isSaving ? 'Saving...' : 'Save Profile'}
                 </>
               )}
             </button>

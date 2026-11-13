@@ -45,6 +45,17 @@ export interface MySpaceUser {
   email: string;
   name?: string;
   avatarUrl?: string;
+  provider?: 'email' | 'google' | 'github' | 'guest';
+  isGuest?: boolean;
+  createdAt?: string;
+  lastSignInAt?: string;
+}
+
+export interface LegacyLocalAccount {
+  id: string;
+  email: string;
+  name: string;
+  namespace: string;
 }
 
 interface MySpaceContextType {
@@ -64,10 +75,16 @@ interface MySpaceContextType {
   isAuthLoading: boolean;
   isSupabaseConfigured: boolean;
   supabaseUser: MySpaceUser | null;
+  isPasswordRecoveryMode: boolean;
+  completePasswordRecovery: (newPassword: string) => Promise<{ error?: string }>;
+  cancelPasswordRecovery: () => void;
   isAuthModalOpen: boolean;
   setIsAuthModalOpen: (open: boolean) => void;
   signInWithSupabase: (email: string, pass: string) => Promise<{ error?: string }>;
   signUpWithSupabase: (email: string, pass: string, name: string) => Promise<{ error?: string }>;
+  signInWithOAuth: (provider: 'google' | 'github') => Promise<{ error?: string }>;
+  oauthError: string | null;
+  clearOauthError: () => void;
   signInAsGuest: () => Promise<{ error?: string }>;
   resetPasswordWithSupabase: (email: string) => Promise<{ error?: string }>;
   signOutSupabase: () => Promise<void>;
@@ -83,11 +100,15 @@ interface MySpaceContextType {
   lockWorkspace: () => void;
   resetLocalWorkspace: () => Promise<void>;
 
-  // Backup & Restore
+  // Backup, Portability & Legacy Local Migration
   isBackupModalOpen: boolean;
   setIsBackupModalOpen: (open: boolean) => void;
   exportEncryptedBackupFile: (pin: string) => Promise<{ success: boolean; filename?: string; error?: string }>;
   importEncryptedBackupFile: (file: File, pin: string) => Promise<{ success: boolean; error?: string; restored?: any }>;
+  hasExistingWorkspaceData: boolean;
+  legacyLocalAccounts: LegacyLocalAccount[];
+  exportLegacyWorkspaceBackup: (namespace: string, email: string, pin: string) => Promise<{ success: boolean; filename?: string; error?: string }>;
+  clearObsoleteLegacyRecords: () => void;
 
   // Global Search Modal
   isSearchOpen: boolean;
@@ -182,7 +203,17 @@ interface MySpaceContextType {
 
 const MySpaceContext = createContext<MySpaceContextType | undefined>(undefined);
 
-const LOCAL_SESSION_KEY = 'myspace_auth_user_session';
+const LEGACY_SESSION_KEY = 'myspace_auth_user_session';
+const LEGACY_USERS_KEY = 'myspace_registered_users';
+const GUEST_SESSION_KEY = 'myspace_guest_session_active';
+
+const GUEST_USER: MySpaceUser = {
+  id: 'user-demo-01',
+  email: 'demo@myspace.local',
+  name: 'Guest User',
+  provider: 'guest',
+  isGuest: true,
+};
 
 export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const deviceId = getDeviceId();
@@ -217,8 +248,12 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
   const [isSupabaseConfigured, setIsSupabaseConfigured] = useState<boolean>(isSupabaseConnected());
   const [supabaseUser, setSupabaseUser] = useState<MySpaceUser | null>(null);
+  const [isPasswordRecoveryMode, setIsPasswordRecoveryMode] = useState<boolean>(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
+  const clearOauthError = useCallback(() => setOauthError(null), []);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [legacyLocalAccounts, setLegacyLocalAccounts] = useState<LegacyLocalAccount[]>([]);
 
   // Device-Isolated Workspace Security State
   const [isWorkspaceLocked, setIsWorkspaceLocked] = useState<boolean>(true);
@@ -351,53 +386,204 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   }, []);
 
+  // Detect legacy local registered-user accounts/workspaces (read-only, never used for auth, never deletes IndexedDB)
+  const refreshLegacyLocalAccounts = useCallback(async () => {
+    try {
+      const detected: LegacyLocalAccount[] = [];
+      const seenNamespaces = new Set<string>();
+
+      const rawUsers = safeStorage.getItem(LEGACY_USERS_KEY);
+      if (rawUsers) {
+        try {
+          const parsed = JSON.parse(rawUsers);
+          if (Array.isArray(parsed)) {
+            for (const entry of parsed) {
+              if (!entry || !entry.id || !entry.email) continue;
+              if (entry.email.toLowerCase() === 'demo@myspace.local' || entry.id === 'user-demo-01') continue;
+              const ns = getWorkspaceNamespace(entry.id);
+              const meta = await workspaceDb.loadAuthMetadata(ns);
+              if (meta) {
+                seenNamespaces.add(ns);
+                detected.push({
+                  id: entry.id,
+                  email: entry.email,
+                  name: entry.name || entry.email.split('@')[0],
+                  namespace: ns,
+                });
+              }
+            }
+          }
+        } catch {
+          // ignore malformed legacy json
+        }
+      }
+
+      // Also check IndexedDB auth_metadata for any legacy local `usr-*` namespaces
+      const allNamespaces = await workspaceDb.listAuthNamespaces();
+      for (const ns of allNamespaces) {
+        if (seenNamespaces.has(ns)) continue;
+        // Legacy local ids generated prior to Supabase Auth started with `usr_` or `usr-`
+        if (ns.startsWith('myspace:usr_')) {
+          detected.push({
+            id: ns.split(':')[1] || ns,
+            email: 'Legacy Local Workspace',
+            name: 'Local Account',
+            namespace: ns,
+          });
+        }
+      }
+
+      setLegacyLocalAccounts(detected);
+    } catch {
+      // non-blocking
+    }
+  }, []);
+
+  // Helper: Normalize Supabase user metadata across Email, Google & GitHub providers
+  const extractSupabaseUser = (supaUser: any): MySpaceUser => {
+    const meta = supaUser?.user_metadata || {};
+    const appMeta = supaUser?.app_metadata || {};
+    const email = supaUser?.email || meta.email || '';
+    const name =
+      meta.full_name ||
+      meta.name ||
+      meta.user_name ||
+      meta.preferred_username ||
+      (email ? email.split('@')[0] : 'User');
+    const avatarUrl = meta.avatar_url || meta.picture || undefined;
+    const rawProvider = (appMeta.provider || 'email').toLowerCase();
+    const provider: MySpaceUser['provider'] =
+      rawProvider === 'google' || rawProvider === 'github' ? rawProvider : 'email';
+
+    return {
+      id: supaUser.id,
+      email,
+      name,
+      avatarUrl,
+      provider,
+      isGuest: false,
+      createdAt: supaUser.created_at,
+      lastSignInAt: supaUser.last_sign_in_at,
+    };
+  };
+
   useEffect(() => {
+    refreshLegacyLocalAccounts();
+  }, [refreshLegacyLocalAccounts]);
+
+  useEffect(() => {
+    let authSubscription: { unsubscribe: () => void } | null = null;
+    let activeUserIdRef: string | null = null;
+
     const initAuth = async () => {
       setIsAuthLoading(true);
 
       try {
+        // Never trust legacy localStorage registered-user objects as authentication proof
+        safeStorage.removeItem(LEGACY_SESSION_KEY);
+
+        // Parse any OAuth cancellation or error params returned from redirect
+        const searchParams = new URLSearchParams(window.location.search);
+        const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+        const hasOAuthCallbackParams =
+          searchParams.has('code') ||
+          hashParams.has('access_token') ||
+          searchParams.has('error') ||
+          hashParams.has('error');
+        const returnedError =
+          searchParams.get('error_description') ||
+          searchParams.get('error') ||
+          hashParams.get('error_description') ||
+          hashParams.get('error');
+
+        let friendlyOAuthError: string | null = null;
+        if (returnedError) {
+          const decoded = decodeURIComponent(returnedError).replace(/\+/g, ' ');
+          friendlyOAuthError = decoded.toLowerCase().includes('access_denied')
+            ? 'Sign-in was cancelled. Please try again.'
+            : decoded;
+          setOauthError(friendlyOAuthError);
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+
+        if (hashParams.get('type') === 'recovery' || searchParams.get('type') === 'recovery') {
+          setIsPasswordRecoveryMode(true);
+        }
+
         const client = getSupabase();
+        setIsSupabaseConfigured(Boolean(client));
         let userFound: MySpaceUser | null = null;
 
         if (client) {
           const { data: { session } } = await client.auth.getSession();
           if (session?.user) {
-            userFound = {
-              id: session.user.id,
-              email: session.user.email || '',
-              name: session.user.user_metadata?.name || session.user.email?.split('@')[0],
-              avatarUrl: session.user.user_metadata?.avatar_url,
-            };
+            userFound = extractSupabaseUser(session.user);
+            activeUserIdRef = userFound.id;
+            // Clear any prior guest session marker when authoritative Supabase user is active
+            safeStorage.removeItem(GUEST_SESSION_KEY);
+            // Clean up OAuth code/hash params after session exchange
+            if (
+              window.location.search.includes('code=') ||
+              window.location.hash.includes('access_token=')
+            ) {
+              window.history.replaceState({}, document.title, window.location.pathname);
+            }
           }
 
-          client.auth.onAuthStateChange(async (_event, session) => {
-            if (session?.user) {
-              const u: MySpaceUser = {
-                id: session.user.id,
-                email: session.user.email || '',
-                name: session.user.user_metadata?.name || session.user.email?.split('@')[0],
-                avatarUrl: session.user.user_metadata?.avatar_url,
-              };
+          // If running inside an OAuth popup opened from iframe preview, notify parent & close
+          if (hasOAuthCallbackParams && window.opener && window.opener !== window) {
+            try {
+              window.opener.postMessage(
+                { type: 'MYSPACE_OAUTH_COMPLETE', error: friendlyOAuthError },
+                '*'
+              );
+              window.close();
+            } catch {
+              // ignore cross-window restriction
+            }
+          }
+
+          const { data } = client.auth.onAuthStateChange(async (event, nextSession) => {
+            if (event === 'PASSWORD_RECOVERY') {
+              setIsPasswordRecoveryMode(true);
+            }
+
+            if (nextSession?.user) {
+              const u = extractSupabaseUser(nextSession.user);
+              const isNewUser = activeUserIdRef !== u.id;
+              activeUserIdRef = u.id;
+              safeStorage.removeItem(GUEST_SESSION_KEY);
               setSupabaseUser(u);
-              await checkWorkspaceSecurity(u);
-            } else {
+
+              if (isNewUser) {
+                dbService.clearActiveWorkspace();
+                await checkWorkspaceSecurity(u);
+              }
+              if (
+                window.location.search.includes('code=') ||
+                window.location.hash.includes('access_token=')
+              ) {
+                window.history.replaceState({}, document.title, window.location.pathname);
+              }
+            } else if (event === 'SIGNED_OUT') {
+              activeUserIdRef = null;
+              safeStorage.removeItem(LEGACY_SESSION_KEY);
+              safeStorage.removeItem(GUEST_SESSION_KEY);
               setSupabaseUser(null);
+              setIsPasswordRecoveryMode(false);
               setIsWorkspaceLocked(true);
+              setIsPinSetupNeeded(false);
+              setActiveNamespace('');
               dbService.clearActiveWorkspace();
             }
           });
+          authSubscription = data.subscription;
         }
 
-        // Check local storage session fallback
-        if (!userFound) {
-          const savedSession = safeStorage.getItem(LOCAL_SESSION_KEY);
-          if (savedSession) {
-            try {
-              userFound = JSON.parse(savedSession);
-            } catch {
-              // ignore
-            }
-          }
+        // Guest session is strictly isolated and only restored if no registered Supabase session exists
+        if (!userFound && safeStorage.getItem(GUEST_SESSION_KEY) === 'true') {
+          userFound = { ...GUEST_USER };
+          activeUserIdRef = userFound.id;
         }
 
         if (userFound) {
@@ -415,6 +601,10 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     };
 
     initAuth();
+
+    return () => {
+      authSubscription?.unsubscribe();
+    };
   }, [checkWorkspaceSecurity]);
 
   // Unlock Workspace with PIN
@@ -450,6 +640,16 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (!state) {
         // Fallback default state if first time unlocking empty DB
         state = getDefaultWorkspaceState(supabaseUser.email, supabaseUser.name);
+      } else {
+        // Always anchor workspace account email to authoritative Supabase Auth / Guest identity
+        state = {
+          ...state,
+          user: {
+            ...state.user,
+            email: supabaseUser.email,
+            name: state.user?.name || supabaseUser.name || supabaseUser.email.split('@')[0],
+          },
+        };
       }
 
       // Activate workspace in dbService & React state
@@ -558,54 +758,59 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     showToast('Device workspace reset. Please set a new Vault PIN.', 'warning');
   };
 
-  // Supabase Auth Methods
+  // Supabase Auth Methods (No local registered-user fallback)
+  const formatSupabaseAuthError = (rawMessage: string, fallback: string): string => {
+    const msg = (rawMessage || '').trim();
+    const lower = msg.toLowerCase();
+    if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('network request failed')) {
+      return 'Unable to reach the authentication service. Please check your internet connection and try again.';
+    }
+    if (lower.includes('invalid login credentials')) {
+      return 'Invalid email address or password. Please verify your credentials and try again.';
+    }
+    if (lower.includes('user already registered') || lower.includes('already been registered')) {
+      return 'An account with this email already exists. Please sign in instead.';
+    }
+    if (lower.includes('email not confirmed')) {
+      return 'Email confirmation is enabled on this Supabase project. Please confirm your email or disable "Confirm email" in Supabase Auth settings.';
+    }
+    return msg || fallback;
+  };
+
   const signInWithSupabase = async (email: string, pass: string): Promise<{ error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     const client = getSupabase();
 
-    if (client) {
-      const { data, error } = await client.auth.signInWithPassword({ email: cleanEmail, password: pass });
-      if (error) {
-        return { error: error.message };
-      }
-      const u: MySpaceUser = {
-        id: data.user.id,
-        email: data.user.email || cleanEmail,
-        name: data.user.user_metadata?.name || cleanEmail.split('@')[0],
+    if (!client) {
+      return {
+        error:
+          'Authentication service is unavailable. Registered accounts require a configured Supabase Auth connection (or choose Use Guest Account for local preview).',
       };
+    }
+
+    try {
+      const { data, error } = await client.auth.signInWithPassword({
+        email: cleanEmail,
+        password: pass,
+      });
+      if (error) {
+        return { error: formatSupabaseAuthError(error.message, 'Unable to sign in.') };
+      }
+      if (!data.user || !data.session) {
+        return { error: 'Authentication did not return an active session. Please try again.' };
+      }
+
+      const u = extractSupabaseUser(data.user);
+      safeStorage.removeItem(GUEST_SESSION_KEY);
+      safeStorage.removeItem(LEGACY_SESSION_KEY);
       setSupabaseUser(u);
-      safeStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(u));
       await checkWorkspaceSecurity(u);
       setIsAuthModalOpen(false);
       showToast(`Welcome back, ${u.name}!`);
       return {};
+    } catch (err: any) {
+      return { error: formatSupabaseAuthError(err?.message, 'Authentication service request failed.') };
     }
-
-    // Local account fallback (if no live Supabase server configured)
-    const localUsersRaw = safeStorage.getItem('myspace_registered_users');
-    let localUsers: Array<{ id: string; email: string; pass: string; name: string }> = [];
-    try {
-      if (localUsersRaw) localUsers = JSON.parse(localUsersRaw);
-    } catch {
-      localUsers = [];
-    }
-
-    const matched = localUsers.find(u => u.email === cleanEmail && u.pass === pass);
-    if (!matched && cleanEmail !== 'demo@myspace.local') {
-      return { error: 'Invalid credentials or user not found. (Use any password with demo@myspace.local or create an account).' };
-    }
-
-    const u: MySpaceUser = {
-      id: matched ? matched.id : 'user-demo-01',
-      email: cleanEmail,
-      name: matched ? matched.name : 'Demo User',
-    };
-    setSupabaseUser(u);
-    safeStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(u));
-    await checkWorkspaceSecurity(u);
-    setIsAuthModalOpen(false);
-    showToast(`Welcome back, ${u.name}!`);
-    return {};
   };
 
   const signUpWithSupabase = async (email: string, pass: string, name: string): Promise<{ error?: string }> => {
@@ -613,73 +818,198 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     const cleanName = name.trim() || cleanEmail.split('@')[0];
     const client = getSupabase();
 
-    if (client) {
+    if (!client) {
+      return {
+        error:
+          'Authentication service is unavailable. Account registration requires a configured Supabase Auth connection.',
+      };
+    }
+
+    try {
       const { data, error } = await client.auth.signUp({
         email: cleanEmail,
         password: pass,
-        options: { data: { name: cleanName } },
+        options: {
+          data: {
+            name: cleanName,
+            full_name: cleanName,
+          },
+        },
       });
+
       if (error) {
-        return { error: error.message };
+        return { error: formatSupabaseAuthError(error.message, 'Unable to create account.') };
       }
-      if (data.user) {
-        const u: MySpaceUser = {
-          id: data.user.id,
-          email: data.user.email || cleanEmail,
-          name: cleanName,
+
+      // Supabase obfuscates existing emails when confirmation is enabled by returning empty identities
+      if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        return { error: 'An account with this email already exists. Please sign in instead.' };
+      }
+
+      if (!data.session || !data.user) {
+        return {
+          error:
+            'Account created, but email confirmation is still enabled in Supabase Auth. Please disable "Confirm email" in Supabase Auth → Providers → Email for immediate workspace access.',
         };
-        setSupabaseUser(u);
-        safeStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(u));
-        await checkWorkspaceSecurity(u);
-        setIsAuthModalOpen(false);
-        showToast('Account registered successfully!');
-        return {};
       }
+
+      const u = extractSupabaseUser(data.user);
+      safeStorage.removeItem(GUEST_SESSION_KEY);
+      safeStorage.removeItem(LEGACY_SESSION_KEY);
+      setSupabaseUser(u);
+      await checkWorkspaceSecurity(u);
+      setIsAuthModalOpen(false);
+      showToast('Account registered successfully!');
+      return {};
+    } catch (err: any) {
+      return { error: formatSupabaseAuthError(err?.message, 'Account registration failed.') };
     }
-
-    // Local account registration fallback
-    const localUsersRaw = safeStorage.getItem('myspace_registered_users');
-    let localUsers: Array<{ id: string; email: string; pass: string; name: string }> = [];
-    try {
-      if (localUsersRaw) localUsers = JSON.parse(localUsersRaw);
-    } catch {
-      localUsers = [];
-    }
-
-    if (localUsers.some(u => u.email === cleanEmail)) {
-      return { error: 'An account with this email already exists.' };
-    }
-
-    const newLocalUser = {
-      id: 'usr-' + Math.random().toString(36).substring(2, 9),
-      email: cleanEmail,
-      pass,
-      name: cleanName,
-    };
-    localUsers.push(newLocalUser);
-    safeStorage.setItem('myspace_registered_users', JSON.stringify(localUsers));
-
-    const u: MySpaceUser = {
-      id: newLocalUser.id,
-      email: newLocalUser.email,
-      name: newLocalUser.name,
-    };
-    setSupabaseUser(u);
-    safeStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(u));
-    await checkWorkspaceSecurity(u);
-    setIsAuthModalOpen(false);
-    showToast('Account registered locally!');
-    return {};
   };
 
+  const signInWithOAuth = async (
+    provider: 'google' | 'github'
+  ): Promise<{ error?: string }> => {
+    setOauthError(null);
+    const client = getSupabase();
+    if (!client) {
+      return {
+        error: `Authentication service is unavailable. Connect Supabase Auth to enable ${
+          provider === 'google' ? 'Google' : 'GitHub'
+        } sign-in.`,
+      };
+    }
+
+    try {
+      const redirectTo = window.location.origin;
+      const isInIframe = (() => {
+        try {
+          return window.self !== window.top;
+        } catch {
+          return true;
+        }
+      })();
+
+      if (!isInIframe) {
+        const { error } = await client.auth.signInWithOAuth({
+          provider,
+          options: {
+            redirectTo,
+            queryParams: provider === 'google' ? { prompt: 'select_account' } : undefined,
+          },
+        });
+        if (error) {
+          return { error: formatSupabaseAuthError(error.message, 'OAuth login failed.') };
+        }
+        return {};
+      }
+
+      // Inside iframe preview: open provider URL in popup so X-Frame-Options doesn't block Google/GitHub
+      const { data, error } = await client.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+          queryParams: provider === 'google' ? { prompt: 'select_account' } : undefined,
+        },
+      });
+
+      if (error) {
+        return { error: formatSupabaseAuthError(error.message, 'OAuth login failed.') };
+      }
+
+      if (!data?.url) {
+        return { error: 'Could not initialize OAuth redirect URL.' };
+      }
+
+      const popup = window.open(
+        data.url,
+        `myspace_${provider}_oauth`,
+        'width=540,height=680,scrollbars=yes,resizable=yes'
+      );
+
+      if (!popup) {
+        return {
+          error:
+            'Popup was blocked by your browser. Please allow popups for this site and try again.',
+        };
+      }
+
+      // Listen for completion message from OAuth popup and also poll session as fallback
+      const handlePopupMessage = async (event: MessageEvent) => {
+        if (event.data?.type !== 'MYSPACE_OAUTH_COMPLETE') return;
+        window.removeEventListener('message', handlePopupMessage);
+        window.clearInterval(pollInterval);
+        if (event.data.error) {
+          setOauthError(event.data.error);
+          return;
+        }
+        try {
+          const { data: sessionData } = await client.auth.getSession();
+          if (sessionData?.session?.user) {
+            const u = extractSupabaseUser(sessionData.session.user);
+            safeStorage.removeItem(GUEST_SESSION_KEY);
+            safeStorage.removeItem(LEGACY_SESSION_KEY);
+            setSupabaseUser(u);
+            await checkWorkspaceSecurity(u);
+          }
+        } catch {
+          // ignore
+        }
+      };
+      window.addEventListener('message', handlePopupMessage);
+
+      const pollInterval = window.setInterval(async () => {
+        try {
+          const { data: sessionData } = await client.auth.getSession();
+          if (sessionData?.session?.user) {
+            window.clearInterval(pollInterval);
+            window.removeEventListener('message', handlePopupMessage);
+            if (!popup.closed) popup.close();
+            const u = extractSupabaseUser(sessionData.session.user);
+            safeStorage.removeItem(GUEST_SESSION_KEY);
+            safeStorage.removeItem(LEGACY_SESSION_KEY);
+            setSupabaseUser(u);
+            await checkWorkspaceSecurity(u);
+            return;
+          }
+          if (popup.closed) {
+            window.clearInterval(pollInterval);
+            window.removeEventListener('message', handlePopupMessage);
+          }
+        } catch {
+          if (popup.closed) {
+            window.clearInterval(pollInterval);
+            window.removeEventListener('message', handlePopupMessage);
+          }
+        }
+      }, 800);
+
+      return {};
+    } catch (err: any) {
+      return {
+        error: formatSupabaseAuthError(err?.message, `Failed to start ${provider} authentication.`),
+      };
+    }
+  };
+
+  // Strictly isolated local-only Guest Account (never registered in Supabase Auth)
   const signInAsGuest = async (): Promise<{ error?: string }> => {
-    const guestUser: MySpaceUser = {
-      id: 'user-demo-01',
-      email: 'demo@myspace.local',
-      name: 'Guest User',
-    };
+    const client = getSupabase();
+    if (client) {
+      try {
+        const { data: { session } } = await client.auth.getSession();
+        if (session) {
+          await client.auth.signOut();
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    dbService.clearActiveWorkspace();
+    const guestUser: MySpaceUser = { ...GUEST_USER };
+    safeStorage.setItem(GUEST_SESSION_KEY, 'true');
     setSupabaseUser(guestUser);
-    safeStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(guestUser));
     await checkWorkspaceSecurity(guestUser);
     setIsAuthModalOpen(false);
     showToast('Signed in with Guest Account', 'info');
@@ -689,14 +1019,48 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
   const resetPasswordWithSupabase = async (email: string): Promise<{ error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     const client = getSupabase();
-    if (client) {
-      const { error } = await client.auth.resetPasswordForEmail(cleanEmail);
-      if (error) {
-        return { error: error.message };
-      }
+    if (!client) {
+      return {
+        error: 'Authentication service is unavailable. Password reset requires a configured Supabase Auth connection.',
+      };
     }
-    showToast(`Password reset link sent to ${cleanEmail}`, 'info');
-    return {};
+
+    try {
+      const { error } = await client.auth.resetPasswordForEmail(cleanEmail, {
+        redirectTo: window.location.origin,
+      });
+      if (error) {
+        return { error: formatSupabaseAuthError(error.message, 'Unable to send password reset email.') };
+      }
+      showToast(`Password reset link sent to ${cleanEmail}`, 'info');
+      return {};
+    } catch (err: any) {
+      return {
+        error: formatSupabaseAuthError(err?.message, 'Unable to send password reset email.'),
+      };
+    }
+  };
+
+  const completePasswordRecovery = async (newPassword: string): Promise<{ error?: string }> => {
+    const client = getSupabase();
+    if (!client) {
+      return { error: 'Authentication service is unavailable.' };
+    }
+    try {
+      const { error } = await client.auth.updateUser({ password: newPassword });
+      if (error) {
+        return { error: formatSupabaseAuthError(error.message, 'Failed to update password.') };
+      }
+      setIsPasswordRecoveryMode(false);
+      showToast('Password updated successfully!', 'success');
+      return {};
+    } catch (err: any) {
+      return { error: formatSupabaseAuthError(err?.message, 'Failed to update password.') };
+    }
+  };
+
+  const cancelPasswordRecovery = () => {
+    setIsPasswordRecoveryMode(false);
   };
 
   const signOutSupabase = async () => {
@@ -708,18 +1072,25 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
         // ignore
       }
     }
-    safeStorage.removeItem(LOCAL_SESSION_KEY);
+    safeStorage.removeItem(LEGACY_SESSION_KEY);
+    safeStorage.removeItem(GUEST_SESSION_KEY);
     dbService.clearActiveWorkspace();
     setSupabaseUser(null);
+    setIsPasswordRecoveryMode(false);
     setIsWorkspaceLocked(true);
     setIsPinSetupNeeded(false);
+    setActiveNamespace('');
     showToast('Signed out of MySpace', 'info');
   };
 
   const updateSupabaseCredentials = (url: string, key: string) => {
-    saveStoredSupabaseConfig({ url: url.trim(), anonKey: key.trim() });
-    setIsSupabaseConfigured(isSupabaseConnected());
-    showToast('Supabase configuration updated');
+    try {
+      saveStoredSupabaseConfig({ url: url.trim(), anonKey: key.trim() });
+      setIsSupabaseConfigured(isSupabaseConnected());
+      showToast('Supabase configuration updated');
+    } catch (err: any) {
+      showToast(err?.message || 'Invalid Supabase credentials', 'error');
+    }
   };
 
   // Encrypted Backup & Restore
@@ -744,16 +1115,25 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     try {
       const res = await importEncryptedBackup(file, pin, activeNamespace);
       if (res.success) {
-        // Reload workspace from dbService
-        const restoredState = dbService.getRawWorkspaceState();
-        setUser(restoredState.user);
-        setCategories(restoredState.categories);
-        setLinks(restoredState.links);
-        setDashboards(restoredState.dashboards);
-        setTasks(restoredState.tasks);
-        setFolders(restoredState.folders);
-        setFiles(restoredState.files);
-        setNotifications(restoredState.notifications);
+        // Reload workspace from dbService while preserving authoritative account email
+        const rawRestored = dbService.getRawWorkspaceState();
+        const anchoredState: WorkspaceState = {
+          ...rawRestored,
+          user: {
+            ...rawRestored.user,
+            email: supabaseUser.email,
+            name: rawRestored.user?.name || supabaseUser.name || supabaseUser.email.split('@')[0],
+          },
+        };
+        await dbService.saveRawWorkspaceState(anchoredState);
+        setUser(anchoredState.user);
+        setCategories(anchoredState.categories);
+        setLinks(anchoredState.links);
+        setDashboards(anchoredState.dashboards);
+        setTasks(anchoredState.tasks);
+        setFolders(anchoredState.folders);
+        setFiles(anchoredState.files);
+        setNotifications(anchoredState.notifications);
 
         showToast(`Backup restored! ${res.restoredItems?.links || 0} links, ${res.restoredItems?.tasks || 0} tasks`, 'success');
         return { success: true, restored: res.restoredItems };
@@ -767,13 +1147,83 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
+  // Safe migration export for pre-Supabase local accounts (verifies Vault PIN without deleting IndexedDB)
+  const exportLegacyWorkspaceBackup = async (
+    namespace: string,
+    email: string,
+    pin: string
+  ): Promise<{ success: boolean; filename?: string; error?: string }> => {
+    try {
+      const meta = await workspaceDb.loadAuthMetadata(namespace);
+      if (!meta) {
+        return { success: false, error: 'Legacy workspace security metadata not found.' };
+      }
+      const isMatch = await verifyPin(pin, meta.verifierSalt, meta.verifierHash);
+      if (!isMatch) {
+        return { success: false, error: 'Incorrect Vault PIN for this legacy workspace.' };
+      }
+      const salt = base64ToUint8Array(meta.verifierSalt);
+      const cryptoKey = await deriveKeyFromPin(pin, salt);
+      const legacyState = await dbService.loadEncryptedWorkspaceFromDB(namespace, cryptoKey);
+      if (!legacyState) {
+        return { success: false, error: 'No encrypted workspace data found for this legacy account.' };
+      }
+      const res = await exportEncryptedBackup(pin, email, namespace, legacyState);
+      showToast(`Exported legacy encrypted backup: ${res.filename}`, 'success');
+      return res;
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Failed to export legacy backup.' };
+    }
+  };
+
+  const clearObsoleteLegacyRecords = () => {
+    safeStorage.removeItem(LEGACY_USERS_KEY);
+    safeStorage.removeItem(LEGACY_SESSION_KEY);
+    setLegacyLocalAccounts([]);
+    showToast('Obsolete local password records removed. IndexedDB backups remain untouched.', 'info');
+  };
+
+  const hasExistingWorkspaceData =
+    links.length > INITIAL_LINKS.length ||
+    tasks.length > INITIAL_TASKS.length ||
+    files.length > INITIAL_FILES.length;
+
   const toggleTheme = () => {
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   };
 
   const updateUser = async (profile: Partial<UserProfile>) => {
-    setUser(prev => ({ ...prev, ...profile }));
-    await dbService.saveUserProfile(profile);
+    // Do not allow modifying authentication identity (email) locally
+    const { email: _ignoredEmail, ...safeUpdates } = profile;
+    const nextUser: UserProfile = {
+      ...user,
+      ...safeUpdates,
+      email: supabaseUser?.email || user.email,
+    };
+
+    if (supabaseUser && !supabaseUser.isGuest && safeUpdates.name) {
+      const client = getSupabase();
+      if (client) {
+        const { error } = await client.auth.updateUser({
+          data: {
+            name: safeUpdates.name,
+            full_name: safeUpdates.name,
+          },
+        });
+        if (error) {
+          showToast(error.message || 'Could not update Supabase account metadata', 'error');
+          return;
+        }
+      }
+      setSupabaseUser(prev => (prev ? { ...prev, name: safeUpdates.name } : prev));
+    }
+
+    setUser(nextUser);
+    await dbService.saveUserProfile({
+      name: nextUser.name,
+      initials: nextUser.initials,
+      role: nextUser.role,
+    });
     showToast('Profile updated');
   };
 
@@ -1453,8 +1903,19 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (data.tasks) setTasks(data.tasks);
       if (data.folders) setFolders(data.folders);
       if (data.files) setFiles(data.files);
-      if (data.user) setUser(data.user);
-      dbService.saveRawWorkspaceState(data);
+      if (data.user) {
+        setUser({
+          ...data.user,
+          email: supabaseUser?.email || data.user.email,
+        });
+      }
+      dbService.saveRawWorkspaceState({
+        ...data,
+        user: {
+          ...(data.user || user),
+          email: supabaseUser?.email || data.user?.email || user.email,
+        },
+      });
       showToast('Workspace data imported successfully');
       return true;
     } catch {
@@ -1475,10 +1936,16 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
         isAuthLoading,
         isSupabaseConfigured,
         supabaseUser,
+        isPasswordRecoveryMode,
+        completePasswordRecovery,
+        cancelPasswordRecovery,
         isAuthModalOpen,
         setIsAuthModalOpen,
         signInWithSupabase,
         signUpWithSupabase,
+        signInWithOAuth,
+        oauthError,
+        clearOauthError,
         signInAsGuest,
         resetPasswordWithSupabase,
         signOutSupabase,
@@ -1495,6 +1962,10 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
         setIsBackupModalOpen,
         exportEncryptedBackupFile,
         importEncryptedBackupFile,
+        hasExistingWorkspaceData,
+        legacyLocalAccounts,
+        exportLegacyWorkspaceBackup,
+        clearObsoleteLegacyRecords,
         isSearchOpen,
         setIsSearchOpen,
         searchQuery,

@@ -132,6 +132,25 @@ export const workspaceDb = {
     }
   },
 
+  async listAuthNamespaces(): Promise<string[]> {
+    try {
+      const db = await openWorkspaceDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORES.AUTH_META, 'readonly');
+        const store = tx.objectStore(STORES.AUTH_META);
+        const req = store.getAllKeys();
+        req.onsuccess = () => resolve(((req.result as string[]) || []).filter(Boolean));
+        req.onerror = () => reject(req.error);
+      });
+    } catch {
+      const keys: string[] = [];
+      memoryStore.forEach((_val, key) => {
+        if (key.startsWith('auth_')) keys.push(key.replace(/^auth_/, ''));
+      });
+      return keys;
+    }
+  },
+
   // ==================== ENCRYPTED WORKSPACE ====================
   async saveEncryptedWorkspace(data: StoredEncryptedWorkspace): Promise<void> {
     try {

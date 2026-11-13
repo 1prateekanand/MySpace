@@ -29,10 +29,11 @@ export interface BackupDecryptedPayload {
 export async function exportEncryptedBackup(
   pin: string,
   userEmail: string,
-  namespace: string
+  namespace: string,
+  rawStateOverride?: WorkspaceState
 ): Promise<{ success: boolean; filename: string }> {
   // 1. Gather raw workspace state
-  const rawState = dbService.getRawWorkspaceState();
+  const rawState = rawStateOverride || dbService.getRawWorkspaceState();
 
   // 2. Gather vault blobs
   const storedBlobs = await workspaceDb.getAllVaultBlobsForNamespace(namespace);

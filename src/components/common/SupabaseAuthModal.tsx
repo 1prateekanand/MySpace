@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, Database, Lock, Mail, Key, ShieldCheck, CheckCircle2, AlertTriangle, ArrowRight } from 'lucide-react';
 import { useMySpace } from '../../context/MySpaceContext';
-import { getStoredSupabaseConfig } from '../../lib/supabase';
+import { getStoredSupabaseConfig, isProductionEnvConfigured } from '../../lib/supabase';
 import { MySpaceLogo } from './MySpaceLogo';
 
 export const SupabaseAuthModal: React.FC = () => {
@@ -26,6 +26,7 @@ export const SupabaseAuthModal: React.FC = () => {
   const [loading, setLoading] = useState(false);
 
   // Config tab state
+  const isProdLocked = isProductionEnvConfigured();
   const initialConfig = getStoredSupabaseConfig();
   const [url, setUrl] = useState(initialConfig.url || '');
   const [anonKey, setAnonKey] = useState(initialConfig.anonKey || '');
@@ -89,7 +90,7 @@ export const SupabaseAuthModal: React.FC = () => {
             <div>
               <h3 className="text-sm font-bold theme-text-primary">MySpace Authentication</h3>
               <p className="text-[11px] theme-text-muted">
-                {isSupabaseConfigured ? 'Connected to PostgreSQL & Cloud Storage' : 'Local Workspace Mode Active'}
+                {isSupabaseConfigured ? 'Connected to Supabase Auth • Local Encrypted Workspace' : 'Authentication Service Disconnected'}
               </p>
             </div>
           </div>
@@ -234,7 +235,9 @@ export const SupabaseAuthModal: React.FC = () => {
         {activeTab === 'config' && (
           <form onSubmit={handleSaveConfig} className="p-5 space-y-4">
             <p className="text-xs theme-text-muted leading-relaxed">
-              To connect your live PostgreSQL database and Supabase Storage bucket, enter your credentials. (Schema script is ready in <code className="text-[#D99A1C] dark:text-[#F5B942]">/supabase/schema.sql</code>).
+              {isProdLocked
+                ? 'Production builds use your deployment environment variables (VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY). Browser overrides are disabled.'
+                : 'Connect Supabase Authentication using your Project URL and Publishable / Anon public key. Workspace data remains encrypted locally in IndexedDB.'}
             </p>
 
             <div>
@@ -244,37 +247,42 @@ export const SupabaseAuthModal: React.FC = () => {
               <input
                 type="text"
                 required
+                readOnly={isProdLocked}
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="https://xyzcompany.supabase.co"
-                className="w-full px-3 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-xs theme-text-primary font-mono focus:outline-none focus:border-[#F5B942]"
+                className="w-full px-3 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-xs theme-text-primary font-mono focus:outline-none focus:border-[#F5B942] read-only:opacity-60"
               />
             </div>
 
             <div>
               <label className="block text-xs font-semibold theme-text-secondary mb-1">
-                Anon / Public API Key
+                Publishable / Anon Public Key
               </label>
               <input
                 type="password"
                 required
+                readOnly={isProdLocked}
                 value={anonKey}
                 onChange={(e) => setAnonKey(e.target.value)}
-                placeholder="eyJhbGciOiJIUzI1NiIsInR5c..."
-                className="w-full px-3 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-xs theme-text-primary font-mono focus:outline-none focus:border-[#F5B942]"
+                placeholder="sb_publishable_... or eyJhbGciOiJIUzI1NiIsInR5c..."
+                className="w-full px-3 py-2 theme-bg-card-inner border theme-border-card rounded-xl text-xs theme-text-primary font-mono focus:outline-none focus:border-[#F5B942] read-only:opacity-60"
               />
             </div>
 
             <div className="pt-2 flex items-center justify-between border-t theme-divider">
               <span className="text-[11px] theme-text-muted">
-                {isSupabaseConfigured ? '✓ Config Active' : 'Offline / Demo Active'}
+                {isSupabaseConfigured ? '✓ Auth Connected' : 'Not Configured'}
               </span>
-              <button
-                type="submit"
-                className="px-4 py-2 gold-btn rounded-xl text-xs font-semibold shadow-md"
-              >
-                Save & Connect
-              </button>
+              {!isProdLocked && (
+                <button
+                  type="submit"
+                  disabled={configLoading}
+                  className="px-4 py-2 gold-btn rounded-xl text-xs font-semibold shadow-md disabled:opacity-50"
+                >
+                  {configLoading ? 'Testing...' : 'Save & Connect'}
+                </button>
+              )}
             </div>
           </form>
         )}

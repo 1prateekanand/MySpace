@@ -8,43 +8,153 @@ export interface SupabaseConfig {
   anonKey: string;
 }
 
+function getEnvSupabaseConfig(): { url: string; anonKey: string; isProd: boolean } {
+  let envUrl = '';
+  let envKey = '';
+  let isProd = false;
+
+  try {
+    const metaEnv = typeof import.meta !== 'undefined' && (import.meta as any)?.env;
+    if (metaEnv) {
+      envUrl = typeof metaEnv.VITE_SUPABASE_URL === 'string' ? metaEnv.VITE_SUPABASE_URL.trim() : '';
+      envKey = typeof metaEnv.VITE_SUPABASE_ANON_KEY === 'string' ? metaEnv.VITE_SUPABASE_ANON_KEY.trim() : '';
+      isProd = Boolean(metaEnv.PROD);
+    }
+  } catch {
+    // ignore
+  }
+
+  return { url: envUrl, anonKey: envKey, isProd };
+}
+
+/**
+ * Rejects placeholder strings and ensures secret / service_role keys are never accepted in frontend code.
+ */
+export function isForbiddenSecretKey(key: string): boolean {
+  const trimmed = (key || '').trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('sb_secret_')) return true;
+
+  // Inspect JWT payload role claim (without verifying signature) to block accidental service_role keys
+  const parts = trimmed.split('.');
+  if (parts.length === 3) {
+    try {
+      const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const json = atob(base64);
+      const payload = JSON.parse(json);
+      if (payload?.role === 'service_role' || payload?.role === 'supabase_admin') {
+        return true;
+      }
+    } catch {
+      // non-JWT publishable keys (sb_publishable_...) are allowed
+    }
+  }
+
+  return false;
+}
+
+export function isValidSupabaseConfig(config: Partial<SupabaseConfig> | null | undefined): config is SupabaseConfig {
+  if (!config || typeof config.url !== 'string' || typeof config.anonKey !== 'string') {
+    return false;
+  }
+
+  const url = config.url.trim();
+  const anonKey = config.anonKey.trim();
+
+  if (
+    !url ||
+    !anonKey ||
+    url.includes('your-project') ||
+    anonKey.includes('your-anon-key')
+  ) {
+    return false;
+  }
+
+  if (isForbiddenSecretKey(anonKey)) {
+    console.error('Blocked privileged Supabase key in frontend configuration.');
+    return false;
+  }
+
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+export function isProductionEnvConfigured(): boolean {
+  const env = getEnvSupabaseConfig();
+  return env.isProd && isValidSupabaseConfig({ url: env.url, anonKey: env.anonKey });
+}
+
 export function getStoredSupabaseConfig(): SupabaseConfig {
+  const env = getEnvSupabaseConfig();
+  const envConfig: SupabaseConfig = { url: env.url, anonKey: env.anonKey };
+
+  // In production, always prioritise Vercel / Vite environment variables and never allow
+  // stale browser-stored configuration to override production credentials.
+  if (env.isProd) {
+    if (isValidSupabaseConfig(envConfig)) {
+      try {
+        safeStorage.removeItem(STORAGE_KEY_CONFIG);
+      } catch {
+        // ignore
+      }
+      return envConfig;
+    }
+    return { url: '', anonKey: '' };
+  }
+
+  // Outside production, still prioritise valid environment variables when provided
+  if (isValidSupabaseConfig(envConfig)) {
+    return envConfig;
+  }
+
+  // Optional non-production browser fallback for local testing when env vars are unset
   try {
     const stored = safeStorage.getItem(STORAGE_KEY_CONFIG);
     if (stored) {
       const parsed = JSON.parse(stored);
       if (parsed && typeof parsed === 'object') {
-        return {
+        const candidate: SupabaseConfig = {
           url: typeof parsed.url === 'string' ? parsed.url.trim() : '',
           anonKey: typeof parsed.anonKey === 'string' ? parsed.anonKey.trim() : '',
         };
+        if (isValidSupabaseConfig(candidate)) {
+          return candidate;
+        }
       }
     }
   } catch {
     // fallback
   }
 
-  let envUrl = '';
-  let envKey = '';
-  try {
-    const metaEnv = typeof import.meta !== 'undefined' && (import.meta as any)?.env;
-    if (metaEnv) {
-      envUrl = (metaEnv.VITE_SUPABASE_URL || '').trim();
-      envKey = (metaEnv.VITE_SUPABASE_ANON_KEY || '').trim();
-    }
-  } catch {
-    // fallback
-  }
-
   return {
-    url: envUrl,
-    anonKey: envKey,
+    url: env.url,
+    anonKey: env.anonKey,
   };
 }
 
 export function saveStoredSupabaseConfig(config: SupabaseConfig): void {
+  const env = getEnvSupabaseConfig();
+  if (env.isProd) {
+    // Never store or override Supabase credentials in browser storage in production
+    return;
+  }
+
+  if (config.anonKey && isForbiddenSecretKey(config.anonKey)) {
+    throw new Error('Privileged service-role or secret keys must never be used in frontend code.');
+  }
+
   try {
-    safeStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(config));
+    if (!config.url && !config.anonKey) {
+      safeStorage.removeItem(STORAGE_KEY_CONFIG);
+    } else {
+      safeStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(config));
+    }
+    cachedClient = null;
+    currentConfigKey = '';
   } catch (e) {
     console.error('Failed to save supabase config:', e);
   }
@@ -56,22 +166,7 @@ let currentConfigKey = '';
 export function getSupabase(): SupabaseClient | null {
   try {
     const config = getStoredSupabaseConfig();
-    if (
-      !config ||
-      !config.url ||
-      !config.anonKey ||
-      typeof config.url !== 'string' ||
-      typeof config.anonKey !== 'string' ||
-      config.url.includes('your-project') ||
-      config.url.trim() === ''
-    ) {
-      return null;
-    }
-
-    // Validate URL syntax before passing to createClient
-    try {
-      new URL(config.url);
-    } catch {
+    if (!isValidSupabaseConfig(config)) {
       return null;
     }
 
@@ -84,6 +179,8 @@ export function getSupabase(): SupabaseClient | null {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
+        detectSessionInUrl: true,
+        flowType: 'pkce',
       },
     });
     currentConfigKey = configKey;
@@ -107,14 +204,11 @@ export async function testSupabaseConnection(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const cfg = customConfig || getStoredSupabaseConfig();
-    if (!cfg.url || !cfg.anonKey || cfg.url.includes('your-project') || cfg.url.trim() === '') {
-      return { success: false, error: 'Please enter a valid Supabase project URL and anon public key.' };
-    }
-
-    try {
-      new URL(cfg.url);
-    } catch {
-      return { success: false, error: 'Invalid Supabase URL format.' };
+    if (!isValidSupabaseConfig(cfg)) {
+      return {
+        success: false,
+        error: 'Please enter a valid Supabase project URL and publishable/anon public key.',
+      };
     }
 
     const testClient = createClient(cfg.url, cfg.anonKey, {
@@ -124,17 +218,13 @@ export async function testSupabaseConnection(
       },
     });
 
-    const { error } = await testClient.from('saved_links').select('id').limit(1);
+    const { error } = await testClient.auth.getSession();
     if (error) {
-      // If table doesn't exist yet, the connection itself is valid
-      if (error.message.includes('relation') || error.message.includes('does not exist')) {
-        return { success: true };
-      }
       return { success: false, error: error.message };
     }
 
     return { success: true };
   } catch (err: any) {
-    return { success: false, error: err?.message || 'Connection to Supabase failed.' };
+    return { success: false, error: err?.message || 'Connection to Supabase Auth failed.' };
   }
 }

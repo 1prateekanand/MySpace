@@ -19,13 +19,16 @@ export const BackupRestoreModal: React.FC = () => {
     setIsBackupModalOpen,
     exportEncryptedBackupFile,
     importEncryptedBackupFile,
-    supabaseUser,
+    hasExistingWorkspaceData,
+    legacyLocalAccounts,
+    clearObsoleteLegacyRecords,
   } = useMySpace();
 
   const [activeTab, setActiveTab] = useState<'export' | 'import'>('export');
   const [exportPin, setExportPin] = useState('');
   const [importPin, setImportPin] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [confirmOverwrite, setConfirmOverwrite] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
@@ -64,6 +67,10 @@ export const BackupRestoreModal: React.FC = () => {
       setErrorMsg('Please enter the decryption PIN for this backup.');
       return;
     }
+    if (hasExistingWorkspaceData && !confirmOverwrite) {
+      setErrorMsg('Please confirm that you want to replace your current device workspace with this backup.');
+      return;
+    }
     setErrorMsg('');
     setSuccessMsg('');
     setLoading(true);
@@ -74,6 +81,7 @@ export const BackupRestoreModal: React.FC = () => {
       setSuccessMsg(`Restored successfully! Recovered ${res.restored?.links || 0} links, ${res.restored?.tasks || 0} tasks, and ${res.restored?.files || 0} files.`);
       setSelectedFile(null);
       setImportPin('');
+      setConfirmOverwrite(false);
     } else {
       setErrorMsg(res.error || 'Decryption or restore failed.');
     }
@@ -232,14 +240,43 @@ export const BackupRestoreModal: React.FC = () => {
                 </div>
               </div>
 
+              {hasExistingWorkspaceData && (
+                <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/30 text-[11px] text-amber-200 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={confirmOverwrite}
+                    onChange={(e) => setConfirmOverwrite(e.target.checked)}
+                    className="mt-0.5 accent-[#F5B942]"
+                  />
+                  <span>
+                    I confirm replacing the current local workspace on this device with the backup contents. My <code className="text-[#F5B942]">.myspace.enc</code> file stays intact for rollback.
+                  </span>
+                </label>
+              )}
+
               <button
                 type="submit"
-                disabled={loading || !selectedFile}
+                disabled={loading || !selectedFile || (hasExistingWorkspaceData && !confirmOverwrite)}
                 className="w-full py-2.5 gold-btn font-semibold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 <Upload className="w-4 h-4" />
                 <span>{loading ? 'Decrypting & Restoring...' : 'Verify PIN & Restore Workspace'}</span>
               </button>
+
+              {legacyLocalAccounts.length > 0 && (
+                <div className="pt-3 border-t theme-divider flex items-center justify-between gap-3 text-[11px]">
+                  <span className="theme-text-muted">
+                    Verified migrated workspace? Remove obsolete local password entries.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={clearObsoleteLegacyRecords}
+                    className="shrink-0 px-2.5 py-1 rounded-lg border border-amber-500/40 text-amber-300 hover:bg-amber-500/10 font-semibold transition-colors"
+                  >
+                    Clean Legacy List
+                  </button>
+                </div>
+              )}
             </form>
           )}
         </div>
