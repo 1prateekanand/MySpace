@@ -77,6 +77,30 @@ export const VaultView: React.FC = () => {
     'f-learning',
   ]);
 
+  // Section-level expand/collapse states (Folders & Files operate independently)
+  const [isFoldersExpanded, setIsFoldersExpanded] = useState<boolean>(true);
+  const [foldersOverflowVisible, setFoldersOverflowVisible] = useState<boolean>(true);
+  const [isFilesExpanded, setIsFilesExpanded] = useState<boolean>(true);
+  const [filesOverflowVisible, setFilesOverflowVisible] = useState<boolean>(true);
+
+  const toggleFoldersSection = () => {
+    if (isFoldersExpanded) {
+      setFoldersOverflowVisible(false);
+      setIsFoldersExpanded(false);
+    } else {
+      setIsFoldersExpanded(true);
+    }
+  };
+
+  const toggleFilesSection = () => {
+    if (isFilesExpanded) {
+      setFilesOverflowVisible(false);
+      setIsFilesExpanded(false);
+    } else {
+      setIsFilesExpanded(true);
+    }
+  };
+
   // Rename modal / prompt inline
   const [activeFolderMenuId, setActiveFolderMenuId] = useState<string | null>(null);
   const [activeFileMenuId, setActiveFileMenuId] = useState<string | null>(null);
@@ -453,14 +477,22 @@ export const VaultView: React.FC = () => {
               {/* + New Dropdown Button */}
               <div className="relative">
                 <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     setIsNewMenuOpen(!isNewMenuOpen);
                   }}
-                  className="gold-btn flex items-center gap-1.5 px-4 py-1.5 rounded-xl font-semibold text-xs shadow-md transition-all cursor-pointer"
+                  aria-expanded={isNewMenuOpen}
+                  aria-haspopup="menu"
+                  className="gold-btn flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl font-semibold text-xs shadow-md transition-all cursor-pointer"
                 >
-                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                  <span>+ New ▾</span>
+                  <Plus className="w-3.5 h-3.5 stroke-[2.5] text-[#120E06] shrink-0" />
+                  <span>New</span>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 stroke-[2.25] text-[#120E06] shrink-0 transition-transform duration-150 ${
+                      isNewMenuOpen ? 'rotate-180' : ''
+                    }`}
+                  />
                 </button>
 
                 {isNewMenuOpen && (
@@ -623,86 +655,146 @@ export const VaultView: React.FC = () => {
             {/* Subfolders Section */}
             {currentSubfolders.length > 0 && (
               <div className="space-y-3">
-                <h4 className="text-xs font-semibold theme-text-muted uppercase tracking-wider">
-                  Folders ({currentSubfolders.length})
-                </h4>
+                <button
+                  type="button"
+                  onClick={toggleFoldersSection}
+                  aria-expanded={isFoldersExpanded}
+                  aria-controls="vault-folders-content"
+                  className="group/section inline-flex items-center gap-1.5 px-1.5 py-1 -ml-1.5 rounded-lg text-xs font-semibold theme-text-muted hover:text-[#D99A1C] dark:hover:text-[#F5B942] hover:bg-[#F5B942]/10 active:bg-[#F5B942]/15 uppercase tracking-wider transition-colors cursor-pointer select-none focus:outline-none focus-visible:ring-1 focus-visible:ring-[#F5B942]"
+                  title={isFoldersExpanded ? 'Collapse Folders' : 'Expand Folders'}
+                >
+                  <ChevronRight
+                    className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
+                      isFoldersExpanded
+                        ? 'rotate-90 text-[#D99A1C] dark:text-[#F5B942]'
+                        : 'theme-text-muted group-hover/section:text-[#D99A1C] dark:group-hover/section:text-[#F5B942]'
+                    }`}
+                  />
+                  <span>Folders ({currentSubfolders.length})</span>
+                </button>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3.5">
-                  {currentSubfolders.map((folder) => (
-                    <div
-                      key={folder.id}
-                      onClick={() => setCurrentFolderId(folder.id)}
-                      className="group theme-bg-card-secondary hover:theme-bg-card-hover border theme-border-card hover:border-[#F5B942]/60 rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02] relative"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="w-10 h-10 rounded-xl bg-[#F5B942]/10 border border-[#F5B942]/25 flex items-center justify-center text-[#D99A1C] dark:text-[#F5B942] group-hover:scale-110 transition-transform">
-                          <Folder className="w-6 h-6 fill-[#F5B942]/80 text-[#D99A1C] dark:text-[#F5B942]" />
-                        </div>
-
-                        {/* More menu */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveFolderMenuId(
-                              activeFolderMenuId === folder.id ? null : folder.id
-                            );
-                          }}
-                          className="p-1 rounded-md theme-text-muted hover:theme-text-primary hover:theme-bg-card-inner cursor-pointer"
-                        >
-                          <MoreVertical className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-
-                      {activeFolderMenuId === folder.id && (
+                <div
+                  id="vault-folders-content"
+                  aria-hidden={!isFoldersExpanded}
+                  onTransitionEnd={(e) => {
+                    if (e.target === e.currentTarget && isFoldersExpanded) {
+                      setFoldersOverflowVisible(true);
+                    }
+                  }}
+                  className={`grid transition-[grid-template-rows,opacity,visibility] duration-200 ease-out ${
+                    isFoldersExpanded
+                      ? 'grid-rows-[1fr] opacity-100 visible'
+                      : 'grid-rows-[0fr] opacity-0 invisible pointer-events-none'
+                  }`}
+                >
+                  <div className={foldersOverflowVisible && isFoldersExpanded ? 'overflow-visible' : 'overflow-hidden'}>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3.5">
+                      {currentSubfolders.map((folder) => (
                         <div
-                          onClick={(e) => e.stopPropagation()}
-                          className="absolute right-2 top-10 w-36 theme-bg-card border theme-border-card rounded-xl shadow-2xl p-1 z-30 animate-in fade-in-50"
+                          key={folder.id}
+                          onClick={() => setCurrentFolderId(folder.id)}
+                          className="group theme-bg-card-secondary hover:theme-bg-card-hover border theme-border-card hover:border-[#F5B942]/60 rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02] relative"
                         >
-                          <button
-                            onClick={() => {
-                              setActiveFolderMenuId(null);
-                              const newName = prompt('New folder name:', folder.name);
-                              if (newName) renameFolder(folder.id, newName);
-                            }}
-                            className="w-full flex items-center gap-2 px-2 py-1 text-xs theme-text-primary hover:theme-bg-card-hover rounded cursor-pointer"
-                          >
-                            <Edit2 className="w-3 h-3 text-[#D99A1C] dark:text-[#F5B942]" /> Rename
-                          </button>
-                          <button
-                            onClick={() => {
-                              setActiveFolderMenuId(null);
-                              if (confirm(`Delete folder "${folder.name}"?`)) {
-                                deleteFolder(folder.id);
-                              }
-                            }}
-                            className="w-full flex items-center gap-2 px-2 py-1 text-xs text-rose-400 hover:bg-rose-950/40 rounded cursor-pointer"
-                          >
-                            <Trash2 className="w-3 h-3" /> Delete
-                          </button>
-                        </div>
-                      )}
+                          <div className="flex items-start justify-between">
+                            <div className="w-10 h-10 rounded-xl bg-[#F5B942]/10 border border-[#F5B942]/25 flex items-center justify-center text-[#D99A1C] dark:text-[#F5B942] group-hover:scale-110 transition-transform">
+                              <Folder className="w-6 h-6 fill-[#F5B942]/80 text-[#D99A1C] dark:text-[#F5B942]" />
+                            </div>
 
-                      <div className="mt-3">
-                        <span className="font-bold text-xs theme-text-primary group-hover:text-[#D99A1C] dark:group-hover:text-[#F5B942] truncate block">
-                          {folder.name}
-                        </span>
-                        <span className="text-[11px] theme-text-muted">
-                          {countFolderItems(folder.id)} items
-                        </span>
-                      </div>
+                            {/* More menu */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveFolderMenuId(
+                                  activeFolderMenuId === folder.id ? null : folder.id
+                                );
+                              }}
+                              className="p-1 rounded-md theme-text-muted hover:theme-text-primary hover:theme-bg-card-inner cursor-pointer"
+                            >
+                              <MoreVertical className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          {activeFolderMenuId === folder.id && (
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute right-2 top-10 w-36 theme-bg-card border theme-border-card rounded-xl shadow-2xl p-1 z-30 animate-in fade-in-50"
+                            >
+                              <button
+                                onClick={() => {
+                                  setActiveFolderMenuId(null);
+                                  const newName = prompt('New folder name:', folder.name);
+                                  if (newName) renameFolder(folder.id, newName);
+                                }}
+                                className="w-full flex items-center gap-2 px-2 py-1 text-xs theme-text-primary hover:theme-bg-card-hover rounded cursor-pointer"
+                              >
+                                <Edit2 className="w-3 h-3 text-[#D99A1C] dark:text-[#F5B942]" /> Rename
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setActiveFolderMenuId(null);
+                                  if (confirm(`Delete folder "${folder.name}"?`)) {
+                                    deleteFolder(folder.id);
+                                  }
+                                }}
+                                className="w-full flex items-center gap-2 px-2 py-1 text-xs text-rose-400 hover:bg-rose-950/40 rounded cursor-pointer"
+                              >
+                                <Trash2 className="w-3 h-3" /> Delete
+                              </button>
+                            </div>
+                          )}
+
+                          <div className="mt-3">
+                            <span className="font-bold text-xs theme-text-primary group-hover:text-[#D99A1C] dark:group-hover:text-[#F5B942] truncate block">
+                              {folder.name}
+                            </span>
+                            <span className="text-[11px] theme-text-muted">
+                              {countFolderItems(folder.id)} items
+                            </span>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </div>
                 </div>
               </div>
             )}
 
             {/* Files Section */}
             <div className="space-y-3">
-              <h4 className="text-xs font-semibold theme-text-muted uppercase tracking-wider">
-                Files ({currentFiles.length})
-              </h4>
+              <button
+                type="button"
+                onClick={toggleFilesSection}
+                aria-expanded={isFilesExpanded}
+                aria-controls="vault-files-content"
+                className="group/section inline-flex items-center gap-1.5 px-1.5 py-1 -ml-1.5 rounded-lg text-xs font-semibold theme-text-muted hover:text-[#D99A1C] dark:hover:text-[#F5B942] hover:bg-[#F5B942]/10 active:bg-[#F5B942]/15 uppercase tracking-wider transition-colors cursor-pointer select-none focus:outline-none focus-visible:ring-1 focus-visible:ring-[#F5B942]"
+                title={isFilesExpanded ? 'Collapse Files' : 'Expand Files'}
+              >
+                <ChevronRight
+                  className={`w-3.5 h-3.5 shrink-0 transition-transform duration-200 ${
+                    isFilesExpanded
+                      ? 'rotate-90 text-[#D99A1C] dark:text-[#F5B942]'
+                      : 'theme-text-muted group-hover/section:text-[#D99A1C] dark:group-hover/section:text-[#F5B942]'
+                  }`}
+                />
+                <span>Files ({currentFiles.length})</span>
+              </button>
 
-              {currentFiles.length === 0 ? (
+              <div
+                id="vault-files-content"
+                aria-hidden={!isFilesExpanded}
+                onTransitionEnd={(e) => {
+                  if (e.target === e.currentTarget && isFilesExpanded) {
+                    setFilesOverflowVisible(true);
+                  }
+                }}
+                className={`grid transition-[grid-template-rows,opacity,visibility] duration-200 ease-out ${
+                  isFilesExpanded
+                    ? 'grid-rows-[1fr] opacity-100 visible'
+                    : 'grid-rows-[0fr] opacity-0 invisible pointer-events-none'
+                }`}
+              >
+                <div className={filesOverflowVisible && isFilesExpanded ? 'overflow-visible' : 'overflow-hidden'}>
+                  {currentFiles.length === 0 ? (
                 <div className="py-14 text-center border-2 border-dashed theme-border-card rounded-2xl theme-bg-card-inner">
                   <Upload className="w-8 h-8 text-[#D99A1C] dark:text-[#F5B942] mx-auto mb-2 opacity-80" />
                   <p className="text-xs font-semibold theme-text-primary">No files in this folder</p>
@@ -1002,6 +1094,8 @@ export const VaultView: React.FC = () => {
                   </table>
                 </div>
               )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

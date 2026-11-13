@@ -6,8 +6,6 @@ import {
   ArrowRight,
   LogOut,
   AlertTriangle,
-  RotateCcw,
-  CheckCircle2,
   Laptop
 } from 'lucide-react';
 import { useMySpace } from '../../context/MySpaceContext';
@@ -72,7 +70,11 @@ export const UnlockScreen: React.FC = () => {
     await resetLocalWorkspace();
   };
 
-  // Truncate namespace for clean display
+  const isGuestAccount =
+    supabaseUser?.id === 'user-demo-01' ||
+    supabaseUser?.email?.toLowerCase() === 'demo@myspace.local';
+
+  // Truncate namespace for clean display (registered users only)
   const shortNamespace = workspaceNamespace
     ? workspaceNamespace.replace('myspace:', '').replace(/-/g, '').slice(0, 24) + '...'
     : 'device-local';
@@ -104,27 +106,40 @@ export const UnlockScreen: React.FC = () => {
 
         {/* Card */}
         <div className="w-full bg-[#111115]/95 border border-zinc-800/80 rounded-3xl p-6 sm:p-7 shadow-2xl backdrop-blur-xl">
-          {/* User & Device Identity pill */}
+          {/* User Identity pill */}
           <div className="flex items-center justify-between p-3 rounded-2xl bg-zinc-900/80 border border-zinc-800/80 mb-5">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-7 h-7 rounded-xl bg-[#F5B942]/10 border border-[#F5B942]/30 flex items-center justify-center text-[#F5B942] shrink-0 font-bold text-xs">
-                {supabaseUser?.email?.[0]?.toUpperCase() || 'U'}
+            {isGuestAccount ? (
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-7 h-7 rounded-xl bg-[#F5B942]/15 border border-[#F5B942]/40 flex items-center justify-center text-[#F5B942] shrink-0 font-bold text-xs">
+                  G
+                </div>
+                <span className="text-sm font-bold text-zinc-100 tracking-tight">
+                  Guest
+                </span>
               </div>
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-zinc-200 truncate">
-                  {supabaseUser?.email}
-                </p>
-                <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-mono">
-                  <Laptop className="w-3 h-3 text-[#F5B942]" />
-                  <span className="truncate">id: {shortNamespace}</span>
+            ) : (
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-7 h-7 rounded-xl bg-[#F5B942]/10 border border-[#F5B942]/30 flex items-center justify-center text-[#F5B942] shrink-0 font-bold text-xs">
+                  {supabaseUser?.email?.[0]?.toUpperCase() || 'U'}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-zinc-200 truncate">
+                    {supabaseUser?.email}
+                  </p>
+                  <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-mono">
+                    <Laptop className="w-3 h-3 text-[#F5B942]" />
+                    <span className="truncate">id: {shortNamespace}</span>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             <button
+              type="button"
               onClick={signOutSupabase}
-              className="p-1.5 text-zinc-400 hover:text-rose-400 hover:bg-zinc-800 rounded-lg transition-colors"
-              title="Sign Out"
+              className="p-1.5 text-zinc-400 hover:text-rose-400 hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
+              title="Switch Account"
+              aria-label="Switch Account"
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -155,6 +170,13 @@ export const UnlockScreen: React.FC = () => {
                 />
                 <Lock className="w-4 h-4 text-zinc-500 absolute left-3 top-3" />
               </div>
+
+              {isGuestAccount && !isPinSetupNeeded && (
+                <p className="mt-2 text-center text-xs text-zinc-400">
+                  Default Guest PIN:{' '}
+                  <span className="font-mono font-bold text-[#F5B942]">1234</span>
+                </p>
+              )}
             </div>
 
             {isPinSetupNeeded && (
@@ -213,11 +235,6 @@ export const UnlockScreen: React.FC = () => {
               </button>
             )}
           </div>
-        </div>
-
-        {/* Security Notice */}
-        <div className="mt-4 text-center text-[11px] text-zinc-500 max-w-sm">
-          Protected by <span className="text-[#F5B942] font-semibold">AES-256-GCM</span>. Your PIN derives an in-memory key via PBKDF2 (100,000 iterations). Your raw PIN is never stored.
         </div>
       </div>
 

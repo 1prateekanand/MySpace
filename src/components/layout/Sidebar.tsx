@@ -11,7 +11,6 @@ import {
   ChevronRight,
   Moon,
   Sun,
-  RotateCcw,
   Rocket,
   Target,
   Shield
@@ -43,7 +42,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     user,
     theme,
     toggleTheme,
-    resetAllToDefault,
   } = useMySpace();
 
   // Work List dropdown expansion state (persisted in localStorage)
@@ -394,19 +392,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 >
                   <Settings className="w-3.5 h-3.5 theme-text-muted" />
                   Account Preferences
-                </button>
-
-                <button
-                  onClick={() => {
-                    if (confirm('Reset workspace to default demo data?')) {
-                      resetAllToDefault();
-                    }
-                    setIsProfileMenuOpen(false);
-                  }}
-                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs text-rose-400 hover:bg-rose-950/20 transition-colors cursor-pointer"
-                >
-                  <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
-                  Reset to Default
                 </button>
               </div>
             )}

@@ -307,13 +307,13 @@ export const LinksView: React.FC = () => {
     <div className="h-full min-h-0 flex flex-col overflow-hidden max-w-7xl w-full mx-auto">
       {/* Fixed Header Elements: Category Tabs, Action Buttons & Google Search Bar */}
       <div className="shrink-0 p-4 sm:p-6 lg:p-8 pb-3 space-y-4">
-        {/* Category Tabs & Action Bar */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        {/* Category Tabs & Primary Action Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           {/* Category Filter Pills */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 lg:pb-0 scrollbar-none">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 scrollbar-none min-w-0 flex-1">
             <button
               onClick={() => setSelectedCategoryFilter('all')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer shrink-0 ${
                 selectedCategoryFilter === 'all'
                   ? 'gold-pill-active'
                   : 'theme-bg-card theme-text-secondary hover:theme-text-primary border theme-border-card hover:theme-bg-card-hover'
@@ -339,7 +339,7 @@ export const LinksView: React.FC = () => {
                 <button
                   key={cat.id}
                   onClick={() => setSelectedCategoryFilter(cat.id)}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer shrink-0 ${
                     isSelected
                       ? 'gold-pill-active'
                       : 'theme-bg-card theme-text-secondary hover:theme-text-primary border theme-border-card hover:theme-bg-card-hover'
@@ -361,29 +361,19 @@ export const LinksView: React.FC = () => {
                 </button>
               );
             })}
-
-            <button
-              onClick={() => {
-                setCategoryToEdit(null);
-                setIsAddCategoryOpen(true);
-              }}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium theme-text-muted hover:theme-text-primary theme-bg-card hover:theme-bg-card-hover border border-dashed theme-border-card hover:border-[#F5B942]/60 transition-colors whitespace-nowrap cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5 text-[#F5B942]" />
-              <span>Add Category</span>
-            </button>
           </div>
 
-          {/* Right: Add Link CTA */}
-          <div className="flex items-center shrink-0">
-            <button
-              onClick={() => handleOpenAddLink(selectedCategoryFilter !== 'all' ? selectedCategoryFilter : undefined)}
-              className="gold-btn flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs tracking-wide shrink-0 cursor-pointer shadow-md"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>Add Link</span>
-            </button>
-          </div>
+          {/* Primary Action: Add Category CTA */}
+          <button
+            onClick={() => {
+              setCategoryToEdit(null);
+              setIsAddCategoryOpen(true);
+            }}
+            className="gold-btn flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs tracking-wide whitespace-nowrap shrink-0 cursor-pointer shadow-md self-start sm:self-auto"
+          >
+            <Plus className="w-4 h-4 stroke-[2.5] text-[#120E06]" />
+            <span>Add Category</span>
+          </button>
         </div>
 
         {/* Google Search Bar - Fixed and always visible */}

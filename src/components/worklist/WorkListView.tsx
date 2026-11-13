@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Kanban,
   Table as TableIcon,
@@ -6,32 +7,36 @@ import {
   Plus,
   Filter,
   Layers,
-  MoreHorizontal,
+  MoreVertical,
   FolderGit2,
   BookOpen,
   User,
+  Rocket,
+  Target,
+  Shield,
+  Edit3,
+  Trash2,
   X
 } from 'lucide-react';
 import { useMySpace } from '../../context/MySpaceContext';
-import { TaskItem, TaskPriority, TaskStatus, WorkListViewMode } from '../../types';
+import { TaskItem, TaskPriority, TaskStatus, WorkDashboard } from '../../types';
 import { KanbanBoard } from './KanbanBoard';
 import { TaskTableView } from './TaskTableView';
 import { TaskAnalyticsView } from './TaskAnalyticsView';
 import { TaskDetailModal } from './TaskDetailModal';
-import { NewDashboardModal } from './NewDashboardModal';
+import { DashboardModal } from './DashboardModal';
+import { DeleteDashboardModal } from './DeleteDashboardModal';
 
 export const WorkListView: React.FC = () => {
   const {
     dashboards,
+    tasks,
     activeDashboardId,
     setActiveDashboardId,
     workListViewMode,
     setWorkListViewMode,
     addTask,
     user,
-    renameDashboard,
-    duplicateDashboard,
-    deleteDashboard,
   } = useMySpace();
 
   // Task Details Modal
@@ -47,9 +52,46 @@ export const WorkListView: React.FC = () => {
   const [newTaskDueDate, setNewTaskDueDate] = useState('');
   const [newTaskNotes, setNewTaskNotes] = useState('');
 
-  // New Dashboard Modal
-  const [isNewDashboardOpen, setIsNewDashboardOpen] = useState(false);
+  // Dashboard Management Modals & Context Menu
+  const [isAddDashboardOpen, setIsAddDashboardOpen] = useState(false);
+  const [dashboardToEdit, setDashboardToEdit] = useState<WorkDashboard | null>(null);
+  const [dashboardToDelete, setDashboardToDelete] = useState<WorkDashboard | null>(null);
   const [activeDashboardMenuId, setActiveDashboardMenuId] = useState<string | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+
+  // Close dashboard options menu on outside click, Escape key, or resize
+  useEffect(() => {
+    if (!activeDashboardMenuId) return;
+
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        !target.closest('.dashboard-menu-container') &&
+        !target.closest('.dashboard-menu-portal')
+      ) {
+        setActiveDashboardMenuId(null);
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveDashboardMenuId(null);
+      }
+    };
+
+    const handleResize = () => {
+      setActiveDashboardMenuId(null);
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', handleResize);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [activeDashboardMenuId]);
 
   // Filter popup toggle
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
@@ -92,116 +134,106 @@ export const WorkListView: React.FC = () => {
     setIsNewTaskModalOpen(false);
   };
 
-  const getDashboardIcon = (id: string) => {
-    if (id === 'dash-learnings') return <BookOpen className="w-3.5 h-3.5" />;
-    if (id === 'dash-personal') return <User className="w-3.5 h-3.5" />;
-    return <FolderGit2 className="w-3.5 h-3.5" />;
+  const getDashboardIcon = (iconName?: string, id?: string) => {
+    const iconKey = iconName || (id === 'dash-learnings' ? 'BookOpen' : id === 'dash-personal' ? 'User' : 'FolderGit2');
+    switch (iconKey) {
+      case 'BookOpen': return <BookOpen className="w-3.5 h-3.5" />;
+      case 'User': return <User className="w-3.5 h-3.5" />;
+      case 'Rocket': return <Rocket className="w-3.5 h-3.5" />;
+      case 'Target': return <Target className="w-3.5 h-3.5" />;
+      case 'Shield': return <Shield className="w-3.5 h-3.5" />;
+      default: return <FolderGit2 className="w-3.5 h-3.5" />;
+    }
   };
 
   return (
     <div className="h-full min-h-0 flex flex-col overflow-hidden max-w-7xl w-full mx-auto">
       {/* Fixed Controls: Dashboard Tabs, KPI Summary Cards & View Navigation */}
       <div className="shrink-0 p-4 sm:p-6 lg:p-8 pb-3 space-y-4">
-        {/* Dashboard Tabs & + New Task Bar */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          {/* Dashboard Pills with context menu */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 scrollbar-none">
+        {/* Dashboard Tabs Bar */}
+        <div className="flex items-center">
+          {/* Dashboard Pills with clean styling, horizontal scroll, and three-dot dropdown */}
+          <div
+            onScroll={() => activeDashboardMenuId && setActiveDashboardMenuId(null)}
+            className="flex items-center gap-2 overflow-x-auto pb-1 custom-scrollbar w-full"
+          >
             {dashboards.map((dash) => {
               const isActive = activeDashboardId === dash.id;
               const isMenuOpen = activeDashboardMenuId === dash.id;
 
               return (
-                <div key={dash.id} className="relative shrink-0 flex items-center">
+                <div
+                  key={dash.id}
+                  className={`relative shrink-0 flex items-center rounded-xl transition-all group dashboard-menu-container ${
+                    isActive
+                      ? 'gold-pill-active'
+                      : 'theme-bg-card theme-text-secondary hover:theme-text-primary border theme-border-card hover:theme-bg-card-hover'
+                  }`}
+                >
                   <button
+                    type="button"
                     onClick={() => setActiveDashboardId(dash.id)}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
-                      isActive
-                        ? 'gold-pill-active'
-                        : 'theme-bg-card theme-text-secondary hover:theme-text-primary border theme-border-card hover:theme-bg-card-hover'
-                    }`}
+                    className="flex items-center gap-2 pl-3.5 pr-1.5 py-2 text-xs font-semibold whitespace-nowrap cursor-pointer rounded-l-xl focus:outline-none"
                   >
                     <span className={isActive ? 'text-inherit' : 'text-[#D99A1C] dark:text-[#F5B942]'}>
-                      {getDashboardIcon(dash.id)}
+                      {getDashboardIcon(dash.icon, dash.id)}
                     </span>
                     <span>{dash.name}</span>
                   </button>
 
-                  {/* Dashboard Options Dropdown trigger */}
-                  {isActive && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActiveDashboardMenuId(isMenuOpen ? null : dash.id);
-                      }}
-                      className="p-1 -ml-2 mr-1 rounded theme-text-muted hover:theme-text-primary hover:theme-bg-card-hover"
-                      title="Dashboard settings"
-                    >
-                      <MoreHorizontal className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-
-                  {isMenuOpen && (
-                    <div className="absolute top-10 left-0 w-44 theme-bg-card border theme-border-card rounded-xl shadow-2xl p-1.5 z-40 animate-in fade-in-50 text-left">
-                      <button
-                        onClick={() => {
-                          setActiveDashboardMenuId(null);
-                          const newName = prompt('New name for dashboard:', dash.name);
-                          if (newName && newName.trim()) renameDashboard(dash.id, newName.trim());
-                        }}
-                        className="w-full px-2 py-1.5 rounded-lg text-xs theme-text-primary hover:theme-bg-card-hover flex items-center gap-2"
-                      >
-                        Rename Dashboard
-                      </button>
-                      <button
-                        onClick={() => {
-                          setActiveDashboardMenuId(null);
-                          duplicateDashboard(dash.id);
-                        }}
-                        className="w-full px-2 py-1.5 rounded-lg text-xs theme-text-primary hover:theme-bg-card-hover flex items-center gap-2"
-                      >
-                        Duplicate Dashboard
-                      </button>
-                      {dashboards.length > 1 && (
-                        <button
-                          onClick={() => {
-                            setActiveDashboardMenuId(null);
-                            if (confirm(`Delete dashboard "${dash.name}" and its tasks?`)) {
-                              deleteDashboard(dash.id);
-                            }
-                          }}
-                          className="w-full px-2 py-1.5 rounded-lg text-xs text-rose-400 hover:bg-rose-950/20 flex items-center gap-2"
-                        >
-                          Delete Dashboard
-                        </button>
-                      )}
-                    </div>
-                  )}
+                  {/* Functional Three-Dot Options Trigger */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (isMenuOpen) {
+                        setActiveDashboardMenuId(null);
+                        setMenuPosition(null);
+                      } else {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const menuWidth = 184;
+                        const menuHeight = 116;
+                        const left = Math.max(12, Math.min(rect.left, window.innerWidth - menuWidth - 12));
+                        const top = Math.min(rect.bottom + 6, window.innerHeight - menuHeight - 12);
+                        setMenuPosition({ top, left });
+                        setActiveDashboardMenuId(dash.id);
+                      }
+                    }}
+                    aria-label={`Options for ${dash.name}`}
+                    aria-expanded={isMenuOpen}
+                    aria-haspopup="menu"
+                    className={`p-1.5 mr-1 rounded-lg transition-all cursor-pointer focus:outline-none ${
+                      isMenuOpen
+                        ? 'opacity-100 bg-black/15 dark:bg-white/15 text-inherit'
+                        : isActive
+                        ? 'opacity-70 hover:opacity-100 hover:bg-black/10'
+                        : 'opacity-55 group-hover:opacity-100 hover:bg-black/10 dark:hover:bg-white/10'
+                    }`}
+                    title={`Options for ${dash.name}`}
+                  >
+                    <MoreVertical className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               );
             })}
 
             <button
-              onClick={() => setIsNewDashboardOpen(true)}
+              type="button"
+              onClick={() => {
+                setDashboardToEdit(null);
+                setIsAddDashboardOpen(true);
+              }}
               className="w-8 h-8 rounded-xl theme-bg-card border border-dashed theme-border-card hover:border-[#F5B942]/60 theme-text-muted hover:theme-text-primary flex items-center justify-center transition-colors shrink-0 cursor-pointer"
-              title="Create Dashboard"
+              title="Add Dashboard"
             >
               <Plus className="w-4 h-4 text-[#F5B942]" />
             </button>
           </div>
-
-          {/* New Task CTA */}
-          <button
-            onClick={() => handleOpenAddTask('todo')}
-            className="gold-btn flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs tracking-wide shadow-md transition-all shrink-0 cursor-pointer"
-          >
-            <Plus className="w-4 h-4 stroke-[2.5]" />
-            <span>New Task</span>
-          </button>
         </div>
 
         {/* KPI Summary Cards Row */}
         {(() => {
-          const currentTasks = useMySpace().tasks.filter((t) => t.dashboardId === activeDashboardId);
+          const currentTasks = tasks.filter((t) => t.dashboardId === activeDashboardId);
           const total = currentTasks.length;
           const completed = currentTasks.filter((t) => t.status === 'done').length;
           const pending = currentTasks.filter((t) => t.status !== 'done').length;
@@ -506,10 +538,75 @@ export const WorkListView: React.FC = () => {
         </div>
       )}
 
-      {/* New Dashboard Modal */}
-      <NewDashboardModal
-        isOpen={isNewDashboardOpen}
-        onClose={() => setIsNewDashboardOpen(false)}
+      {/* Dashboard Options Dropdown Portal (Prevents overflow clipping & stays inside screen boundaries) */}
+      {activeDashboardMenuId &&
+        menuPosition &&
+        (() => {
+          const targetDash = dashboards.find((d) => d.id === activeDashboardMenuId);
+          if (!targetDash) return null;
+
+          return createPortal(
+            <div
+              role="menu"
+              aria-label={`Options for ${targetDash.name}`}
+              style={{ top: menuPosition.top, left: menuPosition.left }}
+              className="dashboard-menu-portal fixed z-[9999] min-w-[184px] theme-bg-card border theme-border-card rounded-xl shadow-2xl p-1.5 animate-in fade-in-50 zoom-in-95 text-left"
+            >
+              <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider theme-text-muted border-b theme-divider mb-1 truncate">
+                {targetDash.name}
+              </div>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setActiveDashboardMenuId(null);
+                  setMenuPosition(null);
+                  setDashboardToEdit(targetDash);
+                }}
+                className="w-full px-2.5 py-1.5 rounded-lg text-xs theme-text-primary hover:theme-bg-card-hover hover:text-[#D99A1C] dark:hover:text-[#F5B942] flex items-center gap-2 cursor-pointer transition-colors"
+              >
+                <Edit3 className="w-3.5 h-3.5 text-[#D99A1C] dark:text-[#F5B942]" />
+                <span>Edit Dashboard</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setActiveDashboardMenuId(null);
+                  setMenuPosition(null);
+                  setDashboardToDelete(targetDash);
+                }}
+                disabled={dashboards.length <= 1}
+                className={`w-full px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-2 transition-colors ${
+                  dashboards.length <= 1
+                    ? 'opacity-40 cursor-not-allowed theme-text-muted'
+                    : 'text-rose-500 hover:bg-rose-500/10 cursor-pointer'
+                }`}
+                title={dashboards.length <= 1 ? 'Cannot delete the only dashboard' : undefined}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Dashboard</span>
+              </button>
+            </div>,
+            document.body
+          );
+        })()}
+
+      {/* Add / Edit Dashboard Modal */}
+      <DashboardModal
+        isOpen={isAddDashboardOpen || Boolean(dashboardToEdit)}
+        onClose={() => {
+          setIsAddDashboardOpen(false);
+          setDashboardToEdit(null);
+        }}
+        dashboardToEdit={dashboardToEdit}
+      />
+
+      {/* Delete Dashboard Confirmation Modal with Task Protection */}
+      <DeleteDashboardModal
+        isOpen={Boolean(dashboardToDelete)}
+        onClose={() => setDashboardToDelete(null)}
+        dashboard={dashboardToDelete}
       />
     </div>
   );

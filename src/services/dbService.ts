@@ -228,9 +228,15 @@ export const dbService = {
     schedulePersist();
   },
 
-  async deleteDashboard(dashboardId: string): Promise<void> {
+  async deleteDashboard(dashboardId: string, moveTasksToDashboardId?: string): Promise<void> {
     activeState.dashboards = (activeState.dashboards || []).filter(d => d.id !== dashboardId);
-    activeState.tasks = (activeState.tasks || []).filter(t => t.dashboardId !== dashboardId);
+    if (moveTasksToDashboardId) {
+      activeState.tasks = (activeState.tasks || []).map(t =>
+        t.dashboardId === dashboardId ? { ...t, dashboardId: moveTasksToDashboardId } : t
+      );
+    } else {
+      activeState.tasks = (activeState.tasks || []).filter(t => t.dashboardId !== dashboardId);
+    }
     schedulePersist();
   },
 

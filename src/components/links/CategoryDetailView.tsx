@@ -161,9 +161,6 @@ export const CategoryDetailView: React.FC<CategoryDetailViewProps> = ({
                   {links.length} {links.length === 1 ? 'bookmark' : 'bookmarks'}
                 </span>
               </div>
-              <p className="text-xs theme-text-muted mt-1">
-                Drag tiles horizontally or vertically to reorder. Click any bookmark to visit.
-              </p>
             </div>
           </div>
 

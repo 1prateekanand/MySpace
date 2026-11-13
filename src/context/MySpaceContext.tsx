@@ -68,6 +68,7 @@ interface MySpaceContextType {
   setIsAuthModalOpen: (open: boolean) => void;
   signInWithSupabase: (email: string, pass: string) => Promise<{ error?: string }>;
   signUpWithSupabase: (email: string, pass: string, name: string) => Promise<{ error?: string }>;
+  signInAsGuest: () => Promise<{ error?: string }>;
   resetPasswordWithSupabase: (email: string) => Promise<{ error?: string }>;
   signOutSupabase: () => Promise<void>;
   updateSupabaseCredentials: (url: string, key: string) => void;
@@ -124,14 +125,14 @@ interface MySpaceContextType {
   reorderCategories: (reorderedCategories: LinkCategory[]) => Promise<void>;
   moveLink: (linkId: string, targetCategoryId: string, targetIndex?: number) => Promise<void>;
 
-  // Work List & Tasks
   dashboards: WorkDashboard[];
   activeDashboardId: string;
   setActiveDashboardId: (id: string) => void;
   addDashboard: (name: string, icon?: string) => Promise<void>;
   renameDashboard: (id: string, name: string) => Promise<void>;
+  updateDashboard: (id: string, updates: { name: string; icon?: string }) => Promise<void>;
   duplicateDashboard: (id: string) => Promise<void>;
-  deleteDashboard: (id: string) => Promise<void>;
+  deleteDashboard: (id: string, moveTasksToDashboardId?: string) => Promise<void>;
   workListViewMode: WorkListViewMode;
   setWorkListViewMode: (mode: WorkListViewMode) => void;
   tasks: TaskItem[];
@@ -304,12 +305,40 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     const namespace = getWorkspaceNamespace(activeUser.id);
     setActiveNamespace(namespace);
 
+    const isGuestAccount =
+      activeUser.id === 'user-demo-01' ||
+      activeUser.email.toLowerCase() === 'demo@myspace.local';
+
     try {
       const meta = await workspaceDb.loadAuthMetadata(namespace);
       if (!meta) {
-        // User has not set up a PIN for this device yet
-        setIsPinSetupNeeded(true);
-        setIsWorkspaceLocked(true);
+        if (isGuestAccount) {
+          // Initialize Guest workspace encrypted with default PIN "1234"
+          const { verifierSalt, verifierHash } = await createPinVerifier('1234');
+          await workspaceDb.saveAuthMetadata({
+            namespace,
+            verifierSalt,
+            verifierHash,
+            createdAt: new Date().toISOString(),
+            lastUnlockedAt: new Date().toISOString(),
+          });
+          const salt = base64ToUint8Array(verifierSalt);
+          const cryptoKey = await deriveKeyFromPin('1234', salt);
+          const initialState = getDefaultWorkspaceState(
+            activeUser.email,
+            activeUser.name || 'Guest'
+          );
+          dbService.setActiveWorkspace(namespace, cryptoKey, initialState);
+          await dbService.saveRawWorkspaceState(initialState);
+          dbService.clearActiveWorkspace();
+
+          setIsPinSetupNeeded(false);
+          setIsWorkspaceLocked(true);
+        } else {
+          // Regular user has not set up a PIN for this device yet
+          setIsPinSetupNeeded(true);
+          setIsWorkspaceLocked(true);
+        }
       } else {
         // PIN exists, workspace is locked until PIN is entered
         setIsPinSetupNeeded(false);
@@ -512,6 +541,18 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     if (!activeNamespace) return;
     await workspaceDb.clearWorkspace(activeNamespace);
     dbService.clearActiveWorkspace();
+
+    const isGuestAccount =
+      supabaseUser &&
+      (supabaseUser.id === 'user-demo-01' ||
+        supabaseUser.email.toLowerCase() === 'demo@myspace.local');
+
+    if (isGuestAccount && supabaseUser) {
+      await checkWorkspaceSecurity(supabaseUser);
+      showToast('Guest workspace reset. Default PIN is 1234.', 'warning');
+      return;
+    }
+
     setIsPinSetupNeeded(true);
     setIsWorkspaceLocked(true);
     showToast('Device workspace reset. Please set a new Vault PIN.', 'warning');
@@ -628,6 +669,20 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     await checkWorkspaceSecurity(u);
     setIsAuthModalOpen(false);
     showToast('Account registered locally!');
+    return {};
+  };
+
+  const signInAsGuest = async (): Promise<{ error?: string }> => {
+    const guestUser: MySpaceUser = {
+      id: 'user-demo-01',
+      email: 'demo@myspace.local',
+      name: 'Guest User',
+    };
+    setSupabaseUser(guestUser);
+    safeStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(guestUser));
+    await checkWorkspaceSecurity(guestUser);
+    setIsAuthModalOpen(false);
+    showToast('Signed in with Guest Account', 'info');
     return {};
   };
 
@@ -958,17 +1013,17 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const renameDashboard = async (id: string, name: string) => {
-    setDashboards(prev =>
-      prev.map(d => {
-        if (d.id === id) {
-          const updated = { ...d, name };
-          dbService.saveDashboard(updated);
-          return updated;
-        }
-        return d;
-      })
-    );
-    showToast(`Dashboard renamed to "${name}"`);
+    await updateDashboard(id, { name });
+  };
+
+  const updateDashboard = async (id: string, updates: { name: string; icon?: string }) => {
+    const existing = dashboards.find(d => d.id === id);
+    if (!existing) return;
+
+    const updated: WorkDashboard = { ...existing, ...updates };
+    setDashboards(prev => prev.map(d => (d.id === id ? updated : d)));
+    await dbService.saveDashboard(updated);
+    showToast(`Dashboard updated successfully`);
   };
 
   const duplicateDashboard = async (id: string) => {
@@ -1000,7 +1055,7 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
     showToast(`Dashboard duplicated as "${newDash.name}"`);
   };
 
-  const deleteDashboard = async (id: string) => {
+  const deleteDashboard = async (id: string, moveTasksToDashboardId?: string) => {
     if (dashboards.length <= 1) {
       showToast('Cannot delete the only remaining dashboard', 'warning');
       return;
@@ -1008,12 +1063,19 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     const remaining = dashboards.filter(d => d.id !== id);
     setDashboards(remaining);
-    setTasks(prev => prev.filter(t => t.dashboardId !== id));
 
-    await dbService.deleteDashboard(id);
+    if (moveTasksToDashboardId) {
+      setTasks(prev =>
+        prev.map(t => (t.dashboardId === id ? { ...t, dashboardId: moveTasksToDashboardId } : t))
+      );
+    } else {
+      setTasks(prev => prev.filter(t => t.dashboardId !== id));
+    }
+
+    await dbService.deleteDashboard(id, moveTasksToDashboardId);
 
     if (activeDashboardId === id) {
-      setActiveDashboardId(remaining[0].id);
+      setActiveDashboardId(moveTasksToDashboardId || remaining[0].id);
     }
     showToast('Dashboard deleted', 'info');
   };
@@ -1417,6 +1479,7 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
         setIsAuthModalOpen,
         signInWithSupabase,
         signUpWithSupabase,
+        signInAsGuest,
         resetPasswordWithSupabase,
         signOutSupabase,
         updateSupabaseCredentials,
@@ -1465,6 +1528,7 @@ export const MySpaceProvider: React.FC<{ children: ReactNode }> = ({ children })
         setActiveDashboardId,
         addDashboard,
         renameDashboard,
+        updateDashboard,
         duplicateDashboard,
         deleteDashboard,
         workListViewMode,
